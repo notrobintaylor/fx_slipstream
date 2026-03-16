@@ -22,14 +22,14 @@
 //   4x input allpass (diffusion)
 //        │
 //        ▼
-//   ┌─── TANK (figure-eight recirculation) ───┐
+//   ┌─── TANK (figure-eight recirculation) ────┐
 //   │                                          │
-//   │  ┌─ Branch 1 ─────────┐  ┌─ Branch 2 ─────────┐
+//   │  ┌─ Branch 1 ─────────┐  ┌─ Branch 2 ──────────┐
 //   │  │ AllpassC ~ (mod)   │  │ AllpassC ~ (mod)    │
 //   │  │ Delay              │  │ Delay               │
 //   │  │ Damping (LP)       │  │ Damping (LP)        │
 //   │  │ × decay            │  │ × decay             │
-//   │  │ Allpass            │  │ Allpass              │
+//   │  │ Allpass            │  │ Allpass             │
 //   │  │ Delay              │  │ Delay               │
 //   │  └────────────────────┘  └─────────────────────┘
 //   │       │                        │
@@ -61,6 +61,8 @@ FxSlipstream : FxBase {
             modPhase: 0.5,
             size: 1.0,
             spread: 1.0,
+            width: 1.0,
+            tilt: 0,
             envAttack: 0.01,
             envRelease: 0.1,
             slew: 0,
@@ -95,6 +97,8 @@ FxSlipstream : FxBase {
             var modPhase   = \modPhase.kr(0.5).lag(slew);
             var size       = \size.kr(1.0).lag(0.3);
             var spread     = \spread.kr(1.0).lag(0.3);
+            var width      = \width.kr(1.0).lag(slew);
+            var tilt       = \tilt.kr(0).lag(slew);
 
             var diffUser   = \inputDiffusion.kr(0.75).lag(slew);
             var diff1      = diffUser;
@@ -202,8 +206,34 @@ FxSlipstream : FxBase {
             // ---- FEEDBACK (via saturation + tanh) ----
             LocalOut.ar((tank2 * decay * satDrive).tanh);
 
-            // ---- OUTPUT ----
-            Out.ar(outBus, HPF.ar([wetL, wetR], 60));
+            // ---- OUTPUT: WIDTH ----
+            // Mid/Side stereo width control.
+            // width=0: mono. width=1: original stereo. width=2: extra wide.
+            var mid  = (wetL + wetR) * 0.5;
+            var side = (wetL - wetR) * 0.5;
+            wetL = mid + (side * width);
+            wetR = mid - (side * width);
+
+            // ---- OUTPUT: TILT EQ ----
+            // First-order shelf that tilts the spectrum.
+            // tilt=0: neutral. tilt=-1: dark (bass up, treble down).
+            // tilt=+1: bright (treble up, bass down).
+            // Implemented as a blend between LP and HP filtered versions.
+            // The crossover is at ~1 kHz. Only applied to the wet signal,
+            // so the tank's internal character is unchanged.
+            var tiltAbs = tilt.abs;
+            var wet = [wetL, wetR];
+            var wetLP = OnePole.ar(wet, (-2pi * (1000 / SampleRate.ir)).exp);
+            var wetHP = wet - wetLP;
+            wet = Select.ar(tilt > 0, [
+                // tilt <= 0: boost lows, cut highs
+                (wet * (1 - tiltAbs)) + (wetLP * tiltAbs * 2),
+                // tilt > 0: boost highs, cut lows
+                (wet * (1 - tiltAbs)) + (wetHP * tiltAbs * 2)
+            ]);
+
+            // ---- OUTPUT: HPF + OUT ----
+            Out.ar(outBus, HPF.ar(wet, 60));
         }).add;
     }
 }
