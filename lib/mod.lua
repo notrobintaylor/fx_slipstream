@@ -2,13 +2,20 @@
 -- fx_slipstream — creative reverb with modulation
 -- for the norns fx mod framework
 --
--- Two specialized modulators:
---   Modulation TM: character targets (how it sounds)
---     damping, size, spread, mod phase, input diffusion
---   Envelope Follower: amount targets (how much)
---     decay, input gain, saturation, mod depth
+-- Three specialized modulators, each with its own domain:
 --
--- The domains don't overlap, so both modulators can run
+--   modulation™: character (how the reverb sounds)
+--     damping, size, spread, mod phase, input diffusion
+--
+--   modulation™ repeater: presentation (how you perceive the output)
+--     width, tilt
+--     Derives values from the TM shift register, echoed with fade/subdiv.
+--
+--   envelope follower: amount (how much)
+--     decay, input gain, saturation, mod depth
+--     Source selectable: audio input, modulation™, or repeater.
+--
+-- The three domains never overlap, so all modulators can run
 -- simultaneously without conflict.
 -- =========================================================================
 
@@ -49,7 +56,7 @@ local FxSlipstream = fx:new{ subpath = "/fx_slipstream" }
 -- constants
 -- =========================================================================
 
--- TM targets: character (how the reverb sounds)
+-- modulation™ targets: character (how the reverb sounds)
 local TM_TARGET = {
     DAMPING=1, SIZE=2, SPREAD=3, MOD_PHASE=4, DIFFUSION=5
 }
@@ -64,7 +71,19 @@ local tm_target_info = {
     [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95  },
 }
 
--- Envelope follower targets: amount (how much)
+-- repeater targets: presentation (how you perceive the output)
+local REP_TARGET = {
+    WIDTH=1, TILT=2
+}
+local rep_target_names = {
+    "width", "tilt"
+}
+local rep_target_info = {
+    [REP_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
+    [REP_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
+}
+
+-- envelope follower targets: amount (how much)
 local ENV_TARGET = {
     DECAY=1, INPUT_GAIN=2, SATURATION=3, MOD_DEPTH=4
 }
@@ -77,6 +96,10 @@ local env_target_info = {
     [ENV_TARGET.SATURATION] = { sc="saturation", base="saturation", lo=0,  hi=1    },
     [ENV_TARGET.MOD_DEPTH]  = { sc="modDepth",   base="modDepth",   lo=0,  hi=1    },
 }
+
+-- envelope follower source options
+local ENV_SOURCE = { AUDIO=1, TM=2, REPEATER=3 }
+local env_source_names = { "audio input", "modulation™", "repeater" }
 
 local step_rate_names = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16"}
 local step_rate_beats = {16, 8, 4, 2, 1, 0.5, 0.25}
@@ -115,6 +138,7 @@ end
 -- =========================================================================
 
 local tm_param_ids = {}
+local rep_param_ids = {}
 local env_param_ids = {}
 local original_names = {}
 
@@ -152,7 +176,7 @@ local base = {
     preDelay = 0.1,
     inputGain = 1.0,
     decay = 0.5,
-    damping = 0.064,      -- 25% on the quadratic curve
+    damping = 0.064,
     saturation = 0,
     bandwidth = 0.9995,
     inputDiffusion = 0.75,
@@ -161,6 +185,8 @@ local base = {
     modPhase = 0.5,
     size = 1.0,
     spread = 1.0,
+    width = 1.0,
+    tilt = 0,
 }
 
 local turing = {
@@ -175,18 +201,25 @@ local turing = {
     slew = 0,
 }
 
-local ctrl_delay = {
+-- modulation™ repeater: derives values from the TM shift register,
+-- but targets width/tilt (presentation domain).
+local repeater = {
+    target = REP_TARGET.WIDTH,
     repeats = 0,
-    decay = 75,
-    subdiv = 3,
+    fade = 75,
+    subdiv = 3,           -- index into cd_subdiv_beats
+    depth = 100,
+    direction = -1,
     echo_clocks = {},
+    last_raw = 0,         -- most recent raw value, available to ENV
 }
 
 local env = {
     target = ENV_TARGET.DECAY,
+    source = ENV_SOURCE.AUDIO,
     sensitivity = 0,
     direction = 1,
-    slew = 100,           -- ms, smooths the parameter changes
+    slew = 100,           -- ms
     active = false,
 }
 
@@ -224,119 +257,86 @@ local function apply_mod(raw, bv, lo, hi, depth, direction)
     end
 end
 
--- =========================================================================
--- TM: apply / restore
--- =========================================================================
-
-local function tm_apply_target(raw, strength)
-    local info = tm_target_info[turing.target]
+--- Generic: send a modulated value for a given target info table.
+local function send_modulated(info, raw, strength, depth, direction)
     if not info then return end
     local bv = base[info.base]
-    local modded = apply_mod(raw, bv, info.lo, info.hi, turing.depth, turing.direction)
+    local modded = apply_mod(raw, bv, info.lo, info.hi, depth, direction)
     local val = bv + (modded - bv) * strength
     val = math.max(info.lo, math.min(info.hi, val))
     send(info.sc, val)
 end
 
-local function tm_restore(target)
-    local info = tm_target_info[target]
+--- Restore a parameter to its base value.
+local function restore_info(info, ids)
     if not info then return end
     send(info.sc, base[info.base])
-    unmark_ids(tm_param_ids[target])
+    unmark_ids(ids)
 end
 
 -- =========================================================================
--- control delay
+-- modulation™: apply / restore
+-- =========================================================================
+
+local function tm_apply_target(raw)
+    local info = tm_target_info[turing.target]
+    send_modulated(info, raw, 1.0, turing.depth, turing.direction)
+end
+
+local function tm_restore(target)
+    restore_info(tm_target_info[target], tm_param_ids[target])
+end
+
+-- =========================================================================
+-- modulation™ repeater
 -- =========================================================================
 
 local function cancel_echoes()
-    for _, id in ipairs(ctrl_delay.echo_clocks) do
+    for _, id in ipairs(repeater.echo_clocks) do
         clock.cancel(id)
     end
-    ctrl_delay.echo_clocks = {}
+    repeater.echo_clocks = {}
 end
 
-local function schedule_echoes(raw)
-    if ctrl_delay.repeats <= 0 then return end
-    local beats = cd_subdiv_beats[ctrl_delay.subdiv]
-    local decay_factor = ctrl_delay.decay / 100
-    local target_at_schedule = turing.target
+--- Apply repeater value to its own target (width or tilt).
+local function rep_apply(raw, strength)
+    local info = rep_target_info[repeater.target]
+    send_modulated(info, raw, strength, repeater.depth, repeater.direction)
+end
 
-    for i = 1, ctrl_delay.repeats do
-        local strength = decay_factor ^ i
+--- Schedule echoes for the repeater's own target.
+-- Each echo applies the TM's raw register value at diminishing strength.
+local function schedule_echoes(raw)
+    if repeater.repeats <= 0 then return end
+    local beats = cd_subdiv_beats[repeater.subdiv]
+    local fade_factor = repeater.fade / 100
+
+    for i = 1, repeater.repeats do
+        local strength = fade_factor ^ i
         local delay_beats = beats * i
         local id = clock.run(function()
             clock.sync(delay_beats)
-            if tm_active() and turing.target == target_at_schedule then
+            if tm_active() then
                 send("slew", turing.slew / 1000)
-                tm_apply_target(raw, strength)
+                rep_apply(raw, strength)
+                -- Make echo value available to ENV if source = repeater
+                repeater.last_raw = raw * strength
+                if env.active and env.source == ENV_SOURCE.REPEATER then
+                    env_from_value(raw * strength)
+                end
             end
         end)
-        table.insert(ctrl_delay.echo_clocks, id)
+        table.insert(repeater.echo_clocks, id)
     end
-end
-
--- =========================================================================
--- TM: step and apply
--- =========================================================================
-
-local function tm_apply()
-    if not tm_active() then return end
-    local m = reg_max(); if m == 0 then return end
-    local raw = turing.register / m
-    send("slew", turing.slew / 1000)
-    tm_apply_target(raw, 1.0)
-    cancel_echoes()
-    schedule_echoes(raw)
-end
-
-local function tm_step()
-    if not tm_active() then return end
-    local m = reg_max()
-    local msb = (turing.register >> (turing.steps - 1)) & 1
-    turing.register = (turing.register << 1) & m
-    if math.random(100) > turing.stability then
-        turing.register = turing.register | (1 - msb)
-    else
-        turing.register = turing.register | msb
-    end
-    tm_apply()
-end
-
--- =========================================================================
--- TM: activation / deactivation
--- =========================================================================
-
-local function start_tm_clock()
-    if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
-    if not tm_active() then return end
-    tm_clock_id = clock.run(function()
-        while true do
-            clock.sync(step_rate_beats[turing.clock_div])
-            tm_step()
-        end
-    end)
-end
-
-local function tm_activate()
-    turing.register = math.random(0, reg_max())
-    mark_ids(tm_param_ids[turing.target])
-    start_tm_clock()
-end
-
-local function tm_deactivate()
-    cancel_echoes()
-    tm_restore(turing.target)
-    if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
 end
 
 -- =========================================================================
 -- envelope follower
 -- =========================================================================
 
-local function env_receive(amplitude)
+--- Core ENV mapping: takes a 0–1 value and applies it to ENV target.
+local function env_from_value(amplitude)
     if not env.active then return end
-
     local info = env_target_info[env.target]
     if not info then return end
 
@@ -355,11 +355,25 @@ local function env_receive(amplitude)
     send(info.sc, val)
 end
 
+--- Called ~30x/sec with the current input amplitude from SC.
+local function env_receive_audio(amplitude)
+    if not env.active then return end
+    if env.source ~= ENV_SOURCE.AUDIO then return end
+    env_from_value(amplitude)
+end
+
+--- Feed TM raw value to ENV (called when source = modulation™)
+local function env_feed_tm(raw)
+    if not env.active then return end
+    if env.source ~= ENV_SOURCE.TM then return end
+    env_from_value(raw)
+end
+
 local function start_env_osc()
     local old_osc = _norns.osc.event
     _norns.osc.event = function(path, args, from)
         if path == '/fx_slipstream/env' and args and #args >= 3 then
-            env_receive(args[3])
+            env_receive_audio(args[3])
         end
         if old_osc then old_osc(path, args, from) end
     end
@@ -376,6 +390,75 @@ local function env_deactivate()
     local info = env_target_info[env.target]
     if info then send(info.sc, base[info.base]) end
     unmark_ids(env_param_ids[env.target])
+end
+
+-- =========================================================================
+-- modulation™: step and apply
+-- =========================================================================
+
+local function tm_apply()
+    if not tm_active() then return end
+    local m = reg_max(); if m == 0 then return end
+    local raw = turing.register / m
+
+    send("slew", turing.slew / 1000)
+
+    -- 1. Apply to TM's own target (character domain)
+    tm_apply_target(raw)
+
+    -- 2. Apply to repeater's target immediately (strength 1.0)
+    --    then schedule echoes at diminishing strength
+    rep_apply(raw, 1.0)
+    cancel_echoes()
+    schedule_echoes(raw)
+
+    -- 3. Feed raw value to ENV if source = TM
+    repeater.last_raw = raw
+    env_feed_tm(raw)
+end
+
+local function tm_step()
+    if not tm_active() then return end
+    local m = reg_max()
+    local msb = (turing.register >> (turing.steps - 1)) & 1
+    turing.register = (turing.register << 1) & m
+    if math.random(100) > turing.stability then
+        turing.register = turing.register | (1 - msb)
+    else
+        turing.register = turing.register | msb
+    end
+    tm_apply()
+end
+
+-- =========================================================================
+-- modulation™: activation / deactivation
+-- =========================================================================
+
+local function start_tm_clock()
+    if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
+    if not tm_active() then return end
+    tm_clock_id = clock.run(function()
+        while true do
+            clock.sync(step_rate_beats[turing.clock_div])
+            tm_step()
+        end
+    end)
+end
+
+local function tm_activate()
+    turing.register = math.random(0, reg_max())
+    mark_ids(tm_param_ids[turing.target])
+    if repeater.repeats > 0 then mark_ids(rep_param_ids[repeater.target]) end
+    start_tm_clock()
+end
+
+local function tm_deactivate()
+    cancel_echoes()
+    tm_restore(turing.target)
+    -- Restore repeater target
+    local rep_info = rep_target_info[repeater.target]
+    if rep_info then restore_info(rep_info, rep_param_ids[repeater.target]) end
+    if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
 end
 
 -- =========================================================================
@@ -402,14 +485,12 @@ function FxSlipstream:add_params()
     -- =====================================================================
     params:add_separator("fx_ss_reverb", "reverb")
 
-    -- predelay (0–500 ms, integer, ms unit)
     params:add_number("fx_ss_predelay", "predelay", 0, 500, 100, fmt_ms)
     params:set_action("fx_ss_predelay", function(v)
         base.preDelay = v / 1000
         send("preDelay", v / 1000)
     end)
 
-    -- input gain (0–100%, integer)
     params:add_number("fx_ss_input_gain", "input gain", 0, 100, 100, fmt_pct)
     params:set_action("fx_ss_input_gain", function(v)
         base.inputGain = v / 100
@@ -418,7 +499,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- decay (0–100%, integer)
     params:add_number("fx_ss_decay", "decay", 0, 100, 50, fmt_pct)
     params:set_action("fx_ss_decay", function(v)
         base.decay = v / 100
@@ -427,7 +507,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- damping (0–100%, integer)
     params:add_number("fx_ss_damping", "damping", 0, 100, 25, fmt_pct)
     params:set_action("fx_ss_damping", function(v)
         local coef = pct_to_damping_coef(v)
@@ -437,7 +516,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- saturation (0–100%, integer)
     params:add_number("fx_ss_saturation", "saturation", 0, 100, 0, fmt_pct)
     params:set_action("fx_ss_saturation", function(v)
         base.saturation = v / 100
@@ -446,7 +524,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- input diffusion (0–100%, integer)
     params:add_number("fx_ss_diffusion", "input diffusion", 0, 100, 75, fmt_pct)
     params:set_action("fx_ss_diffusion", function(v)
         base.inputDiffusion = v / 100
@@ -455,7 +532,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- size (10–300%, integer, displayed as multiplier)
     params:add_number("fx_ss_size", "size", 10, 300, 100, fmt_x)
     params:set_action("fx_ss_size", function(v)
         base.size = v / 100
@@ -464,7 +540,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- spread (0–200%, integer, displayed as multiplier)
     params:add_number("fx_ss_spread", "spread", 0, 200, 100, fmt_x)
     params:set_action("fx_ss_spread", function(v)
         base.spread = v / 100
@@ -473,12 +548,28 @@ function FxSlipstream:add_params()
         end
     end)
 
+    params:add_number("fx_ss_width", "width", 0, 200, 100, fmt_pct)
+    params:set_action("fx_ss_width", function(v)
+        base.width = v / 100
+        if not (tm_active() and repeater.repeats > 0 and repeater.target == REP_TARGET.WIDTH) then
+            send("width", v / 100)
+        end
+    end)
+
+    -- tilt (-100 to +100, displayed as %, mapped to -1..+1)
+    params:add_number("fx_ss_tilt", "tilt", -100, 100, 0, fmt_pct)
+    params:set_action("fx_ss_tilt", function(v)
+        base.tilt = v / 100
+        if not (tm_active() and repeater.repeats > 0 and repeater.target == REP_TARGET.TILT) then
+            send("tilt", v / 100)
+        end
+    end)
+
     -- =====================================================================
     -- tank modulation
     -- =====================================================================
     params:add_separator("fx_ss_mod", "tank modulation")
 
-    -- mod depth (0–100%, integer)
     params:add_number("fx_ss_mod_depth", "mod depth", 0, 100, 0, fmt_pct)
     params:set_action("fx_ss_mod_depth", function(v)
         base.modDepth = v / 100
@@ -487,7 +578,6 @@ function FxSlipstream:add_params()
         end
     end)
 
-    -- mod rate (0.01–10 Hz, exponential)
     params:add_control("fx_ss_mod_rate", "mod rate",
         controlspec.new(0.01, 10000, 'exp', 0, 1.0, "hz"), fmt_hz)
     params:set_action("fx_ss_mod_rate", function(v)
@@ -495,7 +585,6 @@ function FxSlipstream:add_params()
         send("modRate", v)
     end)
 
-    -- mod phase (0–100 → 0–360°)
     params:add_number("fx_ss_mod_phase", "mod phase", 0, 100, 50, fmt_deg)
     params:set_action("fx_ss_mod_phase", function(v)
         base.modPhase = v / 100
@@ -505,9 +594,9 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
-    -- modulation TM (character: damping, size, spread, mod phase, diffusion)
+    -- modulation™ (character: damping, size, spread, mod phase, diffusion)
     -- =====================================================================
-    params:add_separator("fx_ss_tm", "modulation TM")
+    params:add_separator("fx_ss_tm", "modulation™")
 
     params:add_option("fx_ss_tm_assign", "mod assign", tm_target_names, TM_TARGET.SIZE)
     params:set_action("fx_ss_tm_assign", function(v)
@@ -547,27 +636,59 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
-    -- modulation TM repeater
+    -- modulation™ repeater (presentation: width, tilt)
     -- =====================================================================
-    params:add_separator("fx_ss_cd", "modulation TM repeater")
+    params:add_separator("fx_ss_rep", "modulation™ repeater")
 
-    local cd_repeats_names = {"off", "1", "2", "3", "4"}
-    params:add_option("fx_ss_cd_repeats", "repeats", cd_repeats_names, 1)
-    params:set_action("fx_ss_cd_repeats", function(v)
-        ctrl_delay.repeats = v - 1  -- index 1 = "off" = 0 repeats
-        if v == 1 then cancel_echoes() end
+    params:add_option("fx_ss_rep_target", "target", rep_target_names, REP_TARGET.WIDTH)
+    params:set_action("fx_ss_rep_target", function(v)
+        if tm_active() and repeater.repeats > 0 then
+            restore_info(rep_target_info[repeater.target], rep_param_ids[repeater.target])
+        end
+        repeater.target = v
+        if tm_active() and repeater.repeats > 0 then
+            mark_ids(rep_param_ids[v])
+        end
     end)
 
-    params:add_number("fx_ss_cd_decay", "repeats fade", 0, 100, 75, fmt_pct)
-    params:set_action("fx_ss_cd_decay", function(v) ctrl_delay.decay = v end)
+    local rep_repeats_names = {"off", "1", "2", "3", "4"}
+    params:add_option("fx_ss_rep_repeats", "repeats", rep_repeats_names, 1)
+    params:set_action("fx_ss_rep_repeats", function(v)
+        local was = repeater.repeats > 0
+        repeater.repeats = v - 1
+        if v == 1 then
+            cancel_echoes()
+            if was then
+                restore_info(rep_target_info[repeater.target], rep_param_ids[repeater.target])
+            end
+        elseif tm_active() then
+            mark_ids(rep_param_ids[repeater.target])
+        end
+    end)
 
-    params:add_option("fx_ss_cd_subdiv", "repeats subdiv", cd_subdiv_names, 3)
-    params:set_action("fx_ss_cd_subdiv", function(v) ctrl_delay.subdiv = v end)
+    params:add_number("fx_ss_rep_fade", "repeats fade", 0, 100, 75, fmt_pct)
+    params:set_action("fx_ss_rep_fade", function(v) repeater.fade = v end)
+
+    params:add_option("fx_ss_rep_subdiv", "repeats subdiv", cd_subdiv_names, 3)
+    params:set_action("fx_ss_rep_subdiv", function(v) repeater.subdiv = v end)
+
+    params:add_number("fx_ss_rep_depth", "mod depth", 0, 100, 100, fmt_pct)
+    params:set_action("fx_ss_rep_depth", function(v) repeater.depth = v end)
+
+    params:add_option("fx_ss_rep_dir", "mod direction", dir_names, 2)
+    params:set_action("fx_ss_rep_dir", function(v)
+        if v == 1 then repeater.direction = 1
+        elseif v == 2 then repeater.direction = -1
+        else repeater.direction = 0 end
+    end)
 
     -- =====================================================================
     -- envelope follower (amount: decay, input gain, saturation, mod depth)
     -- =====================================================================
     params:add_separator("fx_ss_env", "envelope follower")
+
+    params:add_option("fx_ss_env_source", "source", env_source_names, ENV_SOURCE.AUDIO)
+    params:set_action("fx_ss_env_source", function(v) env.source = v end)
 
     params:add_option("fx_ss_env_target", "target", env_target_names, ENV_TARGET.DECAY)
     params:set_action("fx_ss_env_target", function(v)
@@ -606,14 +727,15 @@ function FxSlipstream:add_params()
     -- populate (M) marker maps
     -- =====================================================================
 
-    -- TM targets (character)
     tm_param_ids[TM_TARGET.DAMPING]   = {"fx_ss_damping"}
     tm_param_ids[TM_TARGET.SIZE]      = {"fx_ss_size"}
     tm_param_ids[TM_TARGET.SPREAD]    = {"fx_ss_spread"}
     tm_param_ids[TM_TARGET.MOD_PHASE] = {"fx_ss_mod_phase"}
     tm_param_ids[TM_TARGET.DIFFUSION] = {"fx_ss_diffusion"}
 
-    -- ENV targets (amount)
+    rep_param_ids[REP_TARGET.WIDTH] = {"fx_ss_width"}
+    rep_param_ids[REP_TARGET.TILT]  = {"fx_ss_tilt"}
+
     env_param_ids[ENV_TARGET.DECAY]      = {"fx_ss_decay"}
     env_param_ids[ENV_TARGET.INPUT_GAIN] = {"fx_ss_input_gain"}
     env_param_ids[ENV_TARGET.SATURATION] = {"fx_ss_saturation"}
