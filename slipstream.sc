@@ -3,44 +3,7 @@
 // =========================================================================
 //
 // A plate-class reverb based on Dattorro's topology (AES 1997),
-// adapted for the norns fx mod framework. Two specialized modulators:
-//   - Modulation TM: shapes the character of the reverb
-//     (damping, size, spread, mod phase, input diffusion)
-//   - Envelope Follower: controls the amount/intensity
-//     (decay, input gain, saturation, mod depth)
-//
-// Signal flow:
-//
-//   stereo in ──> envelope follower (→ Lua via OSC)
-//        │
-//        × inputGain
-//        │
-//        ▼
-//   mono sum ──> predelay ──> bandwidth LP
-//        │
-//        ▼
-//   4x input allpass (diffusion)
-//        │
-//        ▼
-//   ┌─── TANK (figure-eight recirculation) ────┐
-//   │                                          │
-//   │  ┌─ Branch 1 ─────────┐  ┌─ Branch 2 ──────────┐
-//   │  │ AllpassC ~ (mod)   │  │ AllpassC ~ (mod)    │
-//   │  │ Delay              │  │ Delay               │
-//   │  │ Damping (LP)       │  │ Damping (LP)        │
-//   │  │ × decay            │  │ × decay             │
-//   │  │ Allpass            │  │ Allpass             │
-//   │  │ Delay              │  │ Delay               │
-//   │  └────────────────────┘  └─────────────────────┘
-//   │       │                        │
-//   │       └──── cross ─────────────┘
-//   │              × decay → saturation (tanh)
-//   │                                          │
-//   │   14 output taps ──> wetL, wetR          │
-//   └──────────────────────────────────────────┘
-//        │
-//        ▼
-//   HPF 60hz ──> stereo out
+// adapted for the norns fx mod framework.
 //
 // No external UGens required.
 // =========================================================================
@@ -77,15 +40,13 @@ FxSlipstream : FxBase {
     addSynthdefs {
         SynthDef(\fxSlipstream, {|inBus, outBus|
 
-            // ---- CONSTANTS ----
+            // ---- ALL VAR DECLARATIONS (SC requires these at block top) ----
             var dSR = 29761;
             var exMax = 24;
-
             var gFacT60 = { |delay, gFac|
                 gFac.sign * (-3 * delay / log10(gFac.abs));
             };
 
-            // ---- PARAMETERS ----
             var slew       = \slew.kr(0);
             var inputGain  = \inputGain.kr(1.0).lag(slew);
             var decay      = \decay.kr(0.5).lag(slew);
@@ -104,41 +65,35 @@ FxSlipstream : FxBase {
             var diff1      = diffUser;
             var diff2      = (diffUser * 0.833).clip(0, 0.75);
             var decayDiff2 = (decay + 0.15).clip(0.25, 0.5);
+            var satDrive   = 1 + (saturation * 9);
 
-            // ---- SATURATION DRIVE ----
-            // Scales the signal entering the tanh limiter in the feedback path.
-            // At saturation=0: drive=1, tanh is nearly transparent.
-            // At saturation=0.5: drive=5.5, warm compression.
-            // At saturation=1: drive=10, heavy coloring.
-            var satDrive = 1 + (saturation * 9);
-
-            // ---- SPREAD-AWARE DELAY TIMES ----
             var idCenter = 200;
             var tkCenter = 2240;
-
             var si = { |samples|
                 (idCenter * (samples / idCenter).pow(spread) / dSR * size).clip(0.00003, 0.1);
             };
-
             var st = { |samples|
                 (tkCenter * (samples / tkCenter).pow(spread) / dSR * size).clip(0.00003, 1);
             };
-
             var modExc = (exMax / dSR) * size;
 
-            // ---- INPUT ----
             var input = In.ar(inBus, 2);
-
-            // ---- ENVELOPE FOLLOWER ----
             var envFollow = Amplitude.kr(
                 Mix.ar(input),
                 \envAttack.kr(0.01),
                 \envRelease.kr(0.1)
             );
+            var mono = Mix.ar(input) * 0.5 * inputGain;
+            var fb = LocalIn.ar(1);
+            var wetL = Silent.ar;
+            var wetR = Silent.ar;
+            var tank, tank2;
+            var mid, side, tiltAbs, wet, wetLP, wetHP;
+
+            // ---- ENVELOPE FOLLOWER → LUA ----
             SendReply.kr(Impulse.kr(30), '/fx_slipstream/env', envFollow);
 
-            // ---- STEREO → MONO → GAIN → PREDELAY → BANDWIDTH ----
-            var mono = Mix.ar(input) * 0.5 * inputGain;
+            // ---- PREDELAY → BANDWIDTH ----
             mono = DelayN.ar(mono, 0.5, \preDelay.kr(0.1).lag(0.1));
             mono = OnePole.ar(mono, bandwidth);
 
@@ -148,13 +103,7 @@ FxSlipstream : FxBase {
             mono = AllpassN.ar(mono, 0.1, si.(379), gFacT60.(si.(379), diff2));
             mono = AllpassN.ar(mono, 0.1, si.(277), gFacT60.(si.(277), diff2));
 
-            // ---- TANK ----
-            var fb = LocalIn.ar(1);
-            var wetL = Silent.ar;
-            var wetR = Silent.ar;
-            var tank, tank2;
-
-            // === BRANCH 1 ===
+            // ---- TANK: BRANCH 1 ----
             tank = AllpassC.ar(
                 mono + (decay * fb),
                 maxdelaytime: 1,
@@ -179,7 +128,7 @@ FxSlipstream : FxBase {
             tank = DelayN.ar(tank, 1, st.(3720));
             wetR = (0.6 * tank) + wetR;
 
-            // === BRANCH 2 ===
+            // ---- TANK: BRANCH 2 ----
             tank2 = AllpassC.ar(
                 (tank * decay) + mono,
                 maxdelaytime: 1,
@@ -206,29 +155,19 @@ FxSlipstream : FxBase {
             // ---- FEEDBACK (via saturation + tanh) ----
             LocalOut.ar((tank2 * decay * satDrive).tanh);
 
-            // ---- OUTPUT: WIDTH ----
-            // Mid/Side stereo width control.
-            // width=0: mono. width=1: original stereo. width=2: extra wide.
-            var mid  = (wetL + wetR) * 0.5;
-            var side = (wetL - wetR) * 0.5;
+            // ---- OUTPUT: WIDTH (mid/side stereo) ----
+            mid  = (wetL + wetR) * 0.5;
+            side = (wetL - wetR) * 0.5;
             wetL = mid + (side * width);
             wetR = mid - (side * width);
 
-            // ---- OUTPUT: TILT EQ ----
-            // First-order shelf that tilts the spectrum.
-            // tilt=0: neutral. tilt=-1: dark (bass up, treble down).
-            // tilt=+1: bright (treble up, bass down).
-            // Implemented as a blend between LP and HP filtered versions.
-            // The crossover is at ~1 kHz. Only applied to the wet signal,
-            // so the tank's internal character is unchanged.
-            var tiltAbs = tilt.abs;
-            var wet = [wetL, wetR];
-            var wetLP = OnePole.ar(wet, (-2pi * (1000 / SampleRate.ir)).exp);
-            var wetHP = wet - wetLP;
+            // ---- OUTPUT: TILT EQ (first-order shelf at ~1kHz) ----
+            tiltAbs = tilt.abs;
+            wet = [wetL, wetR];
+            wetLP = OnePole.ar(wet, (-2pi * (1000 / SampleRate.ir)).exp);
+            wetHP = wet - wetLP;
             wet = Select.ar(tilt > 0, [
-                // tilt <= 0: boost lows, cut highs
                 (wet * (1 - tiltAbs)) + (wetLP * tiltAbs * 2),
-                // tilt > 0: boost highs, cut lows
                 (wet * (1 - tiltAbs)) + (wetHP * tiltAbs * 2)
             ]);
 
