@@ -78,8 +78,8 @@ local env_target_info = {
     [ENV_TARGET.MOD_DEPTH]  = { sc="modDepth",   base="modDepth",   lo=0,  hi=1    },
 }
 
-local step_rate_names = {"1/1","1/2","1/4","1/8","1/16"}
-local step_rate_beats = {4, 2, 1, 0.5, 0.25}
+local step_rate_names = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16"}
+local step_rate_beats = {16, 8, 4, 2, 1, 0.5, 0.25}
 
 local dir_names = {"+", "-", "+ & -"}
 local env_dir_names = {"+", "-"}
@@ -152,11 +152,11 @@ local base = {
     preDelay = 0.1,
     inputGain = 1.0,
     decay = 0.5,
-    damping = 0.092,
+    damping = 0.064,      -- 25% on the quadratic curve
     saturation = 0,
     bandwidth = 0.9995,
     inputDiffusion = 0.75,
-    modDepth = 0.2,
+    modDepth = 0,
     modRate = 1.0,
     modPhase = 0.5,
     size = 1.0,
@@ -171,7 +171,7 @@ local turing = {
     depth = 100,
     direction = -1,
     stability = 50,
-    clock_div = 3,
+    clock_div = 5,        -- index into step_rate_beats (1/4)
     slew = 0,
 }
 
@@ -186,7 +186,7 @@ local env = {
     target = ENV_TARGET.DECAY,
     sensitivity = 0,
     direction = 1,
-    slew = 200,
+    slew = 100,           -- ms, smooths the parameter changes
     active = false,
 }
 
@@ -428,7 +428,7 @@ function FxSlipstream:add_params()
     end)
 
     -- damping (0–100%, integer)
-    params:add_number("fx_ss_damping", "damping", 0, 100, 30, fmt_pct)
+    params:add_number("fx_ss_damping", "damping", 0, 100, 25, fmt_pct)
     params:set_action("fx_ss_damping", function(v)
         local coef = pct_to_damping_coef(v)
         base.damping = coef
@@ -479,7 +479,7 @@ function FxSlipstream:add_params()
     params:add_separator("fx_ss_mod", "tank modulation")
 
     -- mod depth (0–100%, integer)
-    params:add_number("fx_ss_mod_depth", "mod depth", 0, 100, 20, fmt_pct)
+    params:add_number("fx_ss_mod_depth", "mod depth", 0, 100, 0, fmt_pct)
     params:set_action("fx_ss_mod_depth", function(v)
         base.modDepth = v / 100
         if not (env.active and env.target == ENV_TARGET.MOD_DEPTH) then
@@ -489,7 +489,7 @@ function FxSlipstream:add_params()
 
     -- mod rate (0.01–10 Hz, exponential)
     params:add_control("fx_ss_mod_rate", "mod rate",
-        controlspec.new(0.01, 10, 'exp', 0, 1.0, "hz"), fmt_hz)
+        controlspec.new(0.01, 10000, 'exp', 0, 1.0, "hz"), fmt_hz)
     params:set_action("fx_ss_mod_rate", function(v)
         base.modRate = v
         send("modRate", v)
@@ -529,7 +529,7 @@ function FxSlipstream:add_params()
     params:add_number("fx_ss_tm_slew", "slew rate", 0, 2000, 0, fmt_ms)
     params:set_action("fx_ss_tm_slew", function(v) turing.slew = v end)
 
-    params:add_option("fx_ss_tm_step_rate", "step rate", step_rate_names, 3)
+    params:add_option("fx_ss_tm_step_rate", "step rate", step_rate_names, 5)
     params:set_action("fx_ss_tm_step_rate", function(v)
         turing.clock_div = v
         if tm_active() then start_tm_clock() end
@@ -547,20 +547,21 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
-    -- control delay (echoes of TM modulation)
+    -- modulation TM repeater
     -- =====================================================================
-    params:add_separator("fx_ss_cd", "control delay")
+    params:add_separator("fx_ss_cd", "modulation TM repeater")
 
-    params:add_number("fx_ss_cd_repeats", "repeats", 0, 4, 0)
+    local cd_repeats_names = {"off", "1", "2", "3", "4"}
+    params:add_option("fx_ss_cd_repeats", "repeats", cd_repeats_names, 1)
     params:set_action("fx_ss_cd_repeats", function(v)
-        ctrl_delay.repeats = v
-        if v == 0 then cancel_echoes() end
+        ctrl_delay.repeats = v - 1  -- index 1 = "off" = 0 repeats
+        if v == 1 then cancel_echoes() end
     end)
 
-    params:add_number("fx_ss_cd_decay", "echo decay", 0, 100, 75, fmt_pct)
+    params:add_number("fx_ss_cd_decay", "repeats fade", 0, 100, 75, fmt_pct)
     params:set_action("fx_ss_cd_decay", function(v) ctrl_delay.decay = v end)
 
-    params:add_option("fx_ss_cd_subdiv", "echo subdiv", cd_subdiv_names, 3)
+    params:add_option("fx_ss_cd_subdiv", "repeats subdiv", cd_subdiv_names, 3)
     params:set_action("fx_ss_cd_subdiv", function(v) ctrl_delay.subdiv = v end)
 
     -- =====================================================================
@@ -588,10 +589,10 @@ function FxSlipstream:add_params()
         if v == 1 then env.direction = 1 else env.direction = -1 end
     end)
 
-    params:add_number("fx_ss_env_slew", "slew rate", 0, 2000, 200, fmt_ms)
+    params:add_number("fx_ss_env_slew", "slew rate", 0, 2000, 100, fmt_ms)
     params:set_action("fx_ss_env_slew", function(v) env.slew = v end)
 
-    params:add_number("fx_ss_env_attack", "attack", 1, 500, 10, fmt_ms)
+    params:add_number("fx_ss_env_attack", "attack", 1, 1000, 10, fmt_ms)
     params:set_action("fx_ss_env_attack", function(v)
         send("envAttack", v / 1000)
     end)
