@@ -1,4 +1,3 @@
-
 // =========================================================================
 // FxSlipstream — creative reverb with modulation
 // =========================================================================
@@ -53,11 +52,11 @@ FxSlipstream : FxBase {
             preDelay: 0.1,
             inputGain: 1.0,
             decay: 0.5,
-            damping: 0.0005,
+            damping: 0.064,
             saturation: 0,
             bandwidth: 0.9995,
             inputDiffusion: 0.75,
-            modDepth: 0.2,
+            modDepth: 0,
             modRate: 1.0,
             modPhase: 0.5,
             size: 1.0,
