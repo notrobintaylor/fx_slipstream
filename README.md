@@ -2,7 +2,7 @@
 
 ### a reverb that moves
 
-A plate-class reverb built on Dattorro's topology, turned into something more restless. Three specialized modulators reshape the hall in real time: a shift register (modulation™) shifts its character, a repeater echoes those shifts onto the stereo image and spectral tilt, and an envelope follower lets your playing dynamics control the intensity. The room doesn't just respond – it reverberates its own changes.
+A plate-class reverb built on Dattorro's topology, turned into something more restless. Three specialized modulators reshape the hall in real time: a shift register (modulation™) shifts the character of the space, a waveform enthusiast lets your playing dynamics control the intensity, and familiar peaks & valleys echoes those dynamics onto the stereo image and spectrum – each repetition a little less faithful to the original, like a memory of a waveform.
 
 Built for the [norns fx mod framework](https://llllllll.co/t/fx-mod-framework/). The name came from what the effect does: sound slips through a stream of transformations, each one coloring it differently.
 
@@ -12,7 +12,7 @@ No external UGens required.
 
 ## How it got here
 
-fx_slipstream started as a learning exercise. After building fx_llll – a multitap delay with a shift register and event system – the next question was whether the same modulation architecture could work on a fundamentally different effect. A delay is discrete: four lines, four taps, four feedback paths. You can point at each one. A reverb is diffuse: the sound enters a recursive network and comes out everywhere at once. Modulating it means changing the space itself, not just the echoes inside it.
+fx_slipstream started as a learning exercise. After building fx_llll – a multitap delay with a shift register and event system – the next question was whether the same modulation architecture could work on a reverb. The answer turned out to be yes, but the interesting part was how differently everything behaved once the modulation targets stopped being concrete and became abstract.
 
 The reverb algorithm is Jon Dattorro's plate topology from his 1997 AES paper "Effect Design." It's a figure-eight network of allpass diffusers, delay lines, and damping filters – the smallest recursive structure he found that produces convincing reverberation. The implementation started from a SuperCollider adaptation by khoin, which provided the tank structure and output tap positions. From there, the design diverged.
 
@@ -20,13 +20,13 @@ The first addition was `size` and `spread`. Size scales all delay times uniforml
 
 The second addition was `mod phase`. Dattorro's original has two modulated allpass delays in the tank, running in antiphase. Making the phase relationship a parameter turned out to be surprisingly expressive. At 0° both branches breathe together – more chorus, less space. At 90° they're maximally decorrelated – the widest stereo image. At 180° they push against each other – a wobble effect. As a modulation target, it makes the room rotate.
 
-The modulation™ came over from fx_llll almost directly, but the targets changed. In a delay, you modulate tap times and feedback amounts – concrete, per-voice parameters. In a reverb, the interesting targets are more abstract: damping (bright to dark), size (room scale), spread (room geometry), mod phase (stereo character), input diffusion (how much the incoming signal gets smeared before entering the tank). These are all "character" parameters – they change *how* the reverb sounds, not *how much* of it there is.
+The modulation™ came over from fx_llll almost directly, but the targets changed. In a delay, you modulate tap times and feedback amounts – concrete, per-voice parameters. In fx_llll, a modulation™ step produces up to four values simultaneously – one per delay line, each reading the shift register from a different bit rotation. In a reverb, the interesting targets are more abstract: damping (bright to dark), size (room scale), spread (room geometry), mod phase (stereo character), input diffusion (how much the incoming signal gets smeared before entering the tank). These are all "character" parameters – they change *how* the reverb sounds, not *how much* of it there is.
 
-The repeater started as an echo generator for the modulation™'s values – a way to make control changes ring out the way audio does. But then it became its own modulator, with its own domain. Instead of targeting the same parameters as the modulation™, the repeater targets `width` and `tilt` on the output: how wide the stereo image is, and how the spectrum tilts between dark and bright. These are "presentation" parameters – they don't change the tank's internal behavior, only how you perceive its output. A modulation™ step fires, the room's size changes (character), and the echoes of that step make the stereo image pulse and the spectrum tilt (presentation). Three layers from one shift register.
+The waveform enthusiast came from a different direction entirely. The modulation™ is rhythmic and structural – it changes the room on a grid. The waveform enthusiast is dynamic and reactive – it lets the room respond to how you play. Loud passages can make the decay longer, or push more signal into the tank, or drive the feedback saturation harder. It handles the "amount" domain – parameters that control intensity rather than character.
 
-The envelope follower came from a different direction entirely. The modulation™ is rhythmic and structural – it changes the room on a grid. The envelope follower is dynamic and reactive – it lets the room respond to how you play. Loud passages can make the decay longer, or push more signal into the tank, or drive the feedback saturation harder. What makes it more than a simple dynamics tracker is the source selector: instead of always following the audio input, it can also follow the modulation™'s raw values or the repeater's echoed values. Set it to track the repeater, and the envelope follower responds not to your playing but to the rhythm of the modulation echoes – the three modulators form a feedback loop on the control plane.
+Familiar peaks & valleys was the last piece, and the one that tied everything together. The idea started with a question: what if the dynamics of your playing didn't just modulate a parameter once, but echoed? The waveform enthusiast tracks your amplitude and sends it to two places: its own target (decay, input gain, saturation, or mod depth) and familiar peaks & valleys, which applies the same dynamic contour to the stereo width or spectral tilt – then repeats it at diminishing strength. A loud phrase makes the stereo image bloom wide, then the width pulses back narrower over the next few beats, each repetition a little less dramatic than the last. The peaks and valleys of your playing ripple through the output, increasingly approximate – like how a real room's resonances die out at different rates, each reflection a fading echo of the original impulse. The name is literal: the hills and valleys of the amplitude envelope become familiar patterns in the stereo field and spectrum, recognized but not quite the same each time they return.
 
-The three domains crystallized late: character (modulation™: damping, size, spread, mod phase, diffusion), presentation (repeater: width, tilt), and amount (envelope follower: decay, input gain, saturation, mod depth). They never overlap, so all three can run simultaneously without conflict.
+The three domains crystallized late: character (modulation™: damping, size, spread, mod phase, diffusion), amount (waveform enthusiast: decay, input gain, saturation, mod depth), and presentation (familiar peaks & valleys: width, tilt). They never overlap, so all three can run simultaneously without conflict. And the signal flow between them is one-directional: the waveform enthusiast feeds familiar peaks & valleys, but not the reverse. No feedback loops on the control plane, unless you count the way the audio feedback in the tank reacts to the modulated parameters – which, of course, feeds back into the waveform enthusiast through the audio path. That loop is intentional.
 
 The saturation parameter controls how hard the signal hits the tanh limiter in the feedback path. At 0%, the limiter is nearly transparent – it's just a safety net. At higher values, the drive increases and the feedback path starts to color the sound. At extreme settings, the hall becomes a distortion effect where each recirculation adds harmonic density. This was always implicit in Dattorro's design – the tanh was there for safety – but making it a controllable parameter turns a protection mechanism into a creative tool.
 
@@ -68,39 +68,39 @@ dust/code/fx_slipstream/
 ## Signal flow
 
 ```
-input -------> envelope follower (amplitude --> Lua via OSC)
-  |
-  x input gain
-  |
-  v
+input -------> waveform enthusiast (amplitude --> Lua)
+  |                  |
+  x input gain       +---> waveform target (amount)
+  |                  |
+  v                  +---> familiar peaks & valleys
 mono sum --> predelay --> bandwidth LP
   |
   v
 4x input allpass (diffusion)
   |
   v
-+--------------------  TANK  ----------------------+
-|                                                  |
-|  +- Branch 1 --------+  +- Branch 2 --------+    |
-|  | AllpassC ~ (mod)   |  | AllpassC ~ (mod)  |   |
-|  | Delay              |  | Delay             |   |
-|  | Damping LP         |  | Damping LP        |   |
-|  | x decay            |  | x decay           |   |
-|  | Allpass            |  | Allpass           |   |
-|  | Delay              |  | Delay             |   |
-|  +--------------------+  +-------------------+   |
-|       |                        |                 |
-|       +------ cross ----------+                  |
-|              x decay --> x satDrive --> tanh     |
-|                                                  |
-|  14 output taps --> wetL, wetR                   |
-+--------------------------------------------------+
++--------------------  TANK  --------------------+
+|                                                |
+|  +-- Branch 1 ------+  +-- Branch 2 ------+    |
+|  | AllpassC ~ (mod) |  | AllpassC ~ (mod) |    |
+|  | Delay            |  | Delay            |    |
+|  | Damping LP       |  | Damping LP       |    |
+|  | x decay          |  | x decay          |    |
+|  | Allpass          |  | Allpass          |    |
+|  | Delay            |  | Delay            |    |
+|  +------------------+  +------------------+    |
+|      |                      |                  |
+|      +----- cross ----------+                  |
+|           x decay --> x satDrive --> tanh      |
+|                                                |
+|  14 output taps --> wetL, wetR                 |
++------------------------------------------------+
   |
   v
-width (mid/side stereo)
+width (mid/side stereo)    <-- familiar peaks & valleys
   |
   v
-tilt (spectral shelf)
+tilt (spectral shelf)      <-- familiar peaks & valleys
   |
   v
 HPF 60hz --> stereo out
@@ -108,9 +108,9 @@ HPF 60hz --> stereo out
 
 The tank is a figure-eight: Branch 1's output crosses into Branch 2's input and vice versa. Every recirculation passes through both branches, both damping filters, and both diffusion stages. The tanh on the feedback path soft-clips the signal, preventing digital clipping at high decay values. The saturation parameter controls how hard the signal hits this limiter – at 0% it's a safety net, at 100% it's a distortion effect.
 
-After the tank, the wet signal passes through two output processors: width controls the stereo image via mid/side processing, and tilt shifts the spectral balance via a first-order shelf at ~1 kHz. Both are targets for the modulation™ repeater.
+After the tank, the wet signal passes through two output processors: width controls the stereo image via mid/side processing, and tilt shifts the spectral balance via a first-order shelf at ~1 kHz. Both are targets for familiar peaks & valleys.
 
-The envelope follower tracks input amplitude in SuperCollider and sends it to Lua ~30 times per second. Alternatively, it can track the modulation™'s shift register value or the repeater's echoed values instead of the audio input.
+The waveform enthusiast tracks input amplitude in SuperCollider and sends it to Lua ~30 times per second. Each amplitude value does two things: it modulates the waveform enthusiast's own target (decay, input gain, saturation, or mod depth), and it feeds into familiar peaks & valleys, which applies it to width or tilt and then echoes it at diminishing strength.
 
 ---
 
@@ -139,7 +139,7 @@ The envelope follower tracks input amplitude in SuperCollider and sends it to Lu
 
 **predelay** is the gap between the dry signal and the first reflection. At 0 ms the reverb is immediate – good for pad-like washes. At 100–200 ms the space feels large and the reverb sits behind the dry signal.
 
-**input gain** controls how much signal enters the tank. At 0% nothing new goes in, but existing reflections ring out. Useful as an envelope follower target: loud playing pushes more signal into the reverb.
+**input gain** controls how much signal enters the tank. At 0% nothing new goes in, but existing reflections ring out. Useful as a waveform enthusiast target: loud playing pushes more signal into the reverb.
 
 **decay** is how much energy survives each trip around the tank. At 50% the hall is moderate. At 90%+ it sustains almost indefinitely. The tanh limiter catches anything that tries to grow beyond unity.
 
@@ -197,9 +197,32 @@ A shift register inspired by Tom Whitwell's [Turing Machine](https://musicthing.
 
 Parameters being modulated by the modulation™ are marked with **(M)** in the parameter menu.
 
-### modulation™ repeater
+### Waveform enthusiast
 
-Derives its values from the modulation™ shift register but targets the presentation domain: parameters that shape *how you perceive* the output. Each modulation™ step is immediately applied to the repeater's target at full strength, followed by echoes at diminishing strength.
+Tracks input amplitude and modulates the amount domain: parameters that control *how much* of the reverb effect is applied. Also feeds the amplitude to familiar peaks & valleys. Set **sensitivity > off** to activate.
+
+| Parameter | Range | Default |
+|-----------|-------|---------|
+| **target** | decay / input gain / saturation / mod depth | decay |
+| **sensitivity** | off / 1–100 % | off |
+| **direction** | + / - | + |
+| **slew rate** | 0–2000 ms | 100 |
+| **attack** | 1–1000 ms | 10 |
+| **release** | 10–2000 ms | 100 |
+
+**sensitivity** at off disables the waveform enthusiast (and familiar peaks & valleys). At 50% the input amplitude has moderate influence. At 100% the full dynamic range is mapped.
+
+**direction +** means loud = parameter goes up. Loud playing → longer decay, more gain, more saturation, or more mod depth. **Direction -** inverts: loud = parameter goes down.
+
+**slew rate** smooths the resulting parameter changes independently of the modulation™'s slew. At 100 ms (default) the changes are perceptible but not jarring.
+
+**attack** shapes how fast the follower responds to increases in amplitude. At 10 ms it catches transients. At 500 ms+ it averages over longer phrases – good for ambient playing where you want the room to respond to overall volume rather than individual notes.
+
+**release** shapes how fast the follower responds to decreases. At 100 ms it drops quickly. At 1000 ms+ it holds the level, creating a slow fade-out of the modulation effect after you stop playing.
+
+### Familiar peaks & valleys
+
+Receives the waveform enthusiast's dynamics and echoes them onto the presentation domain: parameters that shape *how you perceive* the output. Each amplitude value from the waveform enthusiast is immediately applied at full strength, then repeated at diminishing strength over the following beats. The peaks and valleys of your playing become familiar patterns in the stereo field and spectrum – recognized but increasingly approximate with each repetition.
 
 | Parameter | Range | Default |
 |-----------|-------|---------|
@@ -210,41 +233,15 @@ Derives its values from the modulation™ shift register but targets the present
 | **mod depth** | 0–100 % | 100 |
 | **mod direction** | + / - / + & - | - |
 
-**target** selects which output parameter the repeater controls. Width pulses the stereo image between narrow and wide. Tilt shifts the spectrum between dark and bright.
+**target** selects which output parameter receives the echoed dynamics. Width pulses the stereo image between narrow and wide. Tilt shifts the spectrum between dark and bright.
 
-**repeats** sets how many echoes follow each modulation™ step. At "off" the repeater still applies the initial value (at full strength) but produces no echoes. At 4, you get the initial value plus four diminishing echoes.
+**repeats** sets how many echoes follow each amplitude value. At "off" the dynamics still apply immediately (at full strength from the waveform enthusiast) but produce no echoes. At 4, you get the initial impulse plus four diminishing echoes.
 
-**repeats fade** controls how much each echo retains from the previous. At 75%: the echoes arrive at 75%, 56%, 42%, 32% of the original modulation strength. At 100% all echoes are at full strength. At 25% the echoes die almost immediately.
+**repeats fade** controls how much each echo retains from the previous. At 75%: the echoes arrive at 75%, 56%, 42%, 32% of the original dynamics. At 100% all echoes are at full strength. At 25% the echoes die almost immediately.
 
 **repeats subdiv** sets the time between echoes, synced to the norns clock. At 1/4 with 120 BPM, each echo arrives 0.5 seconds after the last.
 
-**mod depth** and **mod direction** control the repeater's own modulation intensity and polarity, independently of the modulation™'s settings.
-
-### Envelope follower
-
-Reacts to a chosen source signal and modulates the amount domain: parameters that control *how much* of the reverb effect is applied. Set **sensitivity > 0** to activate.
-
-| Parameter | Range | Default |
-|-----------|-------|---------|
-| **source** | audio input / modulation™ / repeater | audio input |
-| **target** | decay / input gain / saturation / mod depth | decay |
-| **sensitivity** | 0–100 % | 0 |
-| **direction** | + / - | + |
-| **slew rate** | 0–2000 ms | 100 |
-| **attack** | 1–1000 ms | 10 |
-| **release** | 10–2000 ms | 100 |
-
-**source** selects what the follower tracks. **Audio input** follows your playing dynamics – loud passages trigger the modulation. **modulation™** follows the shift register's raw value – the follower responds to the pattern, not the audio. **Repeater** follows the echoed values – the follower reacts to the rhythm of the modulation echoes, including their fade. Attack and release only apply when source is set to audio input.
-
-**sensitivity** at 0% disables the envelope follower. At 50% the source signal has moderate influence. At 100% the full dynamic range is mapped.
-
-**direction +** means high source value = parameter goes up. With audio source: loud playing → longer decay, more gain, more saturation, or more mod depth. **Direction -** inverts.
-
-**slew rate** smooths the resulting parameter changes independently of the modulation™'s slew. At 100 ms (default) the changes are perceptible but not jarring.
-
-**attack** shapes how fast the follower responds to increases in amplitude (audio source only). At 10 ms it catches transients. At 500 ms+ it averages over longer phrases – good for ambient playing where you want the room to respond to overall volume rather than individual notes.
-
-**release** shapes how fast the follower responds to decreases (audio source only). At 100 ms it drops quickly. At 1000 ms+ it holds the level, creating a slow fade-out of the modulation effect after you stop playing.
+**mod depth** and **mod direction** control how strongly and in which polarity the dynamics affect the target, independently of the waveform enthusiast's own settings.
 
 ---
 
@@ -254,23 +251,23 @@ Reacts to a chosen source signal and modulates the amount domain: parameters tha
 
 **Breathing room.** modulation™: steps = 8, mod assign = size, mod depth = 40%, mod direction = + & -, step rate = 1/2, stability = 70%, slew = 500 ms. The room gently expands and contracts, as if the walls were breathing. Keep spread at 1.00x to preserve the geometry.
 
-**Dynamic decay.** Envelope follower: source = audio input, target = decay, sensitivity = 60%, direction = +, attack = 10 ms, release = 500 ms. Play loud, the hall sustains. Play soft, it pulls back. The reverb follows your phrasing.
+**Dynamic decay.** Waveform enthusiast: target = decay, sensitivity = 60%, direction = +, attack = 10 ms, release = 500 ms. Play loud, the hall sustains. Play soft, it pulls back. The reverb follows your phrasing.
+
+**Stereo bloom.** Waveform enthusiast: target = decay, sensitivity = 40%, direction = +. Familiar peaks & valleys: target = width, repeats = 3, fade = 70%, subdiv = 1/4, mod direction = +. Play a loud phrase – the hall sustains and the stereo image blooms wide, then the width pulses back over the next three beats. Each pulse a little narrower than the last.
 
 **Geometry shift.** modulation™: steps = 12, mod assign = spread, mod depth = 80%, mod direction = + & -, step rate = 1/4, stability = 40%. The room's shape constantly changes – sometimes tight and metallic, sometimes stretched and diffuse. The Dattorro geometry is just one stop on a continuum.
 
-**Tape wobble.** Mod depth = 15%, mod rate = 0.3 hz, mod phase = 90°. No modulation™, no envelope. Just the tank's built-in modulation, slow and wide. Add decay = 70%, damping = 40%. The echoes shimmer like a worn tape machine.
+**Tape wobble.** Mod depth = 15%, mod rate = 0.3 hz, mod phase = 90°. No modulation™, no waveform enthusiast. Just the tank's built-in modulation, slow and wide. Add decay = 70%, damping = 40%. The echoes shimmer like a worn tape machine.
 
-**Saturated feedback.** Saturation = 50%, decay = 85%, damping = 50%. The hall gets dirtier with each pass through the tank. Add envelope follower: source = audio input, target = saturation, sensitivity = 40%, direction = +. Loud playing drives the feedback harder.
+**Saturated feedback.** Saturation = 50%, decay = 85%, damping = 50%. The hall gets dirtier with each pass through the tank. Add waveform enthusiast: target = saturation, sensitivity = 40%, direction = +. Loud playing drives the feedback harder.
 
-**Stereo pulse.** modulation™: steps = 8, mod assign = size, step rate = 1/4, stability = 60%. Repeater: target = width, repeats = 3, fade = 60%, subdiv = 1/8. The room shifts size on quarter notes, and the stereo image pulses on eighth notes in response. Add tilt as repeater target instead for a spectral version.
+**Spectral echo.** Waveform enthusiast: target = input gain, sensitivity = 60%, direction = +. Familiar peaks & valleys: target = tilt, repeats = 4, fade = 60%, subdiv = 1/8, mod direction = + & -. Your playing dynamics echo as spectral shifts – the output tilts bright, then dark, then bright again, each time less dramatically. The spectrum ripples.
 
-**Phase rotator.** modulation™: steps = 8, mod assign = mod phase, mod depth = 100%, mod direction = + & -, step rate = 1/8, stability = 60%, slew = 200 ms. Repeater: target = tilt, repeats = 3, fade = 70%, subdiv = 1/8. The stereo character shifts rhythmically, and the spectrum tilts in echo.
+**Phase rotator.** modulation™: steps = 8, mod assign = mod phase, mod depth = 100%, mod direction = + & -, step rate = 1/8, stability = 60%, slew = 200 ms. The stereo character shifts rhythmically as the tank's phase relationship rotates.
 
 **Frozen room.** Decay = 95%, input gain = 0%. Play something, then drop the gain. The reverb tail holds almost indefinitely while nothing new enters. Slowly increase damping to watch the frozen sound darken.
 
-**Ambient swell.** Envelope follower: source = audio input, target = input gain, sensitivity = 80%, direction = +, attack = 500 ms, release = 2000 ms, slew = 500 ms. Decay = 75%. The reverb builds slowly as you play louder, and fades slowly when you stop. The long attack smooths out individual notes.
-
-**Cross-modulation.** modulation™: steps = 8, mod assign = damping, step rate = 1/4, stability = 50%. Repeater: target = width, repeats = 2, fade = 80%, subdiv = 1/4. Envelope follower: source = repeater, target = decay, sensitivity = 50%, direction = +. The TM shifts damping, the repeater echoes those shifts onto width, and the envelope follower tracks the echoes to modulate decay. Three layers from one shift register.
+**Ambient swell.** Waveform enthusiast: target = input gain, sensitivity = 80%, direction = +, attack = 500 ms, release = 2000 ms, slew = 500 ms. Decay = 75%. Familiar peaks & valleys: target = width, repeats = 2, fade = 80%, subdiv = 1/2. The reverb builds slowly as you play louder, the stereo image widens in sympathy, and both fade slowly when you stop. The long attack smooths out individual notes.
 
 ---
 
@@ -282,7 +279,7 @@ fx_slipstream allows decay up to 100% and saturation up to 100%. At extreme sett
 
 - **Use a limiter** on the norns output or on the next device in your signal chain.
 - **Start at low volume** when experimenting with high decay and saturation.
-- **The envelope follower is your safety valve.** Set target = input gain, direction = -, sensitivity = 30%. When things get loud, less signal enters the tank.
+- **The waveform enthusiast is your safety valve.** Set target = input gain, direction = -, sensitivity = 30%. When things get loud, less signal enters the tank.
 - **Protect your hearing.** This is not a disclaimer. It's advice from someone who has been surprised by feedback loops more than once.
 
 ---
@@ -292,7 +289,7 @@ fx_slipstream allows decay up to 100% and saturation up to 100%. At extreme sett
 - **Send A/B routing** may not produce audible output depending on the host script's audio routing. This is a limitation of the fx mod framework's send bus architecture. Use insert mode for reliable operation.
 - **Insert dry/wet** behavior depends on the fx mod framework's replacer synth. At extreme settings, the crossfade may not behave as expected.
 - **Size at extreme values:** Very large size values (>2.5x) combined with high spread can push delay times to their maximum (1 second). The sound may clip or alias. If the reverb sounds wrong, reduce size or spread.
-- **Envelope follower latency:** The ~33 ms update interval (30 Hz) means the follower cannot track sub-bass modulation or very fast transients. This is by design – faster updates would overload the OSC bus.
+- **Waveform enthusiast latency:** The ~33 ms update interval (30 Hz) means the follower cannot track sub-bass modulation or very fast transients. This is by design – faster updates would overload the OSC bus.
 
 ---
 
@@ -312,4 +309,4 @@ The modulation™ section is directly inspired by Tom Whitwell's [Turing Machine
 
 Built on sixolet's [fx mod framework](https://llllllll.co/t/fx-mod-framework/), which made it possible to run custom effects alongside any norns script.
 
-The design philosophy – reverb as a modulatable instrument rather than a room emulation – draws from hardware that treats the algorithm as a voice: **Make Noise Erbe-Verb**, whose CV inputs turn a reverb into a playable resonator. **Make Noise Mimeophon**, which blurs the line between delay, reverb, and sampler. And **Qu-Bit Aurora**, whose granular approach to reverberation shows that the space between categories is where the interesting sounds live. These are reverbs that musicians keep returning to not because they sound like rooms, but because they don't – and that inexhaustibility is what fx_slipstream tries to achieve in software.
+The design philosophy – reverb as a modulatable instrument rather than a room emulation – draws from hardware that treats the algorithm as a voice: **Make Noise Erbe-Verb**, whose CV inputs turn a reverb into a playable resonator. **Make Noise Mimeophon**, which blurs the line between delay, reverb, and sampler. And **Qu-Bit Aurora**, whose granular approach to reverberation shows that the space between categories is where the interesting sounds live. These are reverbs that musicians keep returning to not because they sound like rooms, but because they don't – and that inexhaustibility is what fx_slipstream tries to be.
