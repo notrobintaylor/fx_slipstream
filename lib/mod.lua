@@ -7,13 +7,16 @@
 --   modulation™: character (how the reverb sounds)
 --     damping, size, spread, mod phase, input diffusion
 --
---   modulation™ repeater: presentation (how you perceive the output)
---     width, tilt
---     Derives values from the TM shift register, echoed with fade/subdiv.
---
---   envelope follower: amount (how much)
+--   waveform enthusiast: amount (how much)
 --     decay, input gain, saturation, mod depth
---     Source selectable: audio input, modulation™, or repeater.
+--     Tracks input amplitude. Feeds values to familiar peaks & valleys.
+--
+--   familiar peaks & valleys: presentation (how you perceive the output)
+--     width, tilt
+--     Receives the waveform enthusiast's dynamics and echoes them
+--     at diminishing strength. The peaks and valleys of your playing
+--     ripple through the stereo image and spectrum, increasingly
+--     approximate with each repetition.
 --
 -- The three domains never overlap, so all modulators can run
 -- simultaneously without conflict.
@@ -71,19 +74,19 @@ local tm_target_info = {
     [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95  },
 }
 
--- repeater targets: presentation (how you perceive the output)
-local REP_TARGET = {
+-- familiar peaks & valleys targets: presentation (how you perceive the output)
+local FPV_TARGET = {
     WIDTH=1, TILT=2
 }
-local rep_target_names = {
+local fpv_target_names = {
     "width", "tilt"
 }
-local rep_target_info = {
-    [REP_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
-    [REP_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
+local fpv_target_info = {
+    [FPV_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
+    [FPV_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
 }
 
--- envelope follower targets: amount (how much)
+-- waveform enthusiast targets: amount (how much)
 local ENV_TARGET = {
     DECAY=1, INPUT_GAIN=2, SATURATION=3, MOD_DEPTH=4
 }
@@ -97,10 +100,6 @@ local env_target_info = {
     [ENV_TARGET.MOD_DEPTH]  = { sc="modDepth",   base="modDepth",   lo=0,  hi=1    },
 }
 
--- envelope follower source options
-local ENV_SOURCE = { AUDIO=1, TM=2, REPEATER=3 }
-local env_source_names = { "audio input", "modulation™", "repeater" }
-
 local step_rate_names = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16"}
 local step_rate_beats = {16, 8, 4, 2, 1, 0.5, 0.25}
 
@@ -110,16 +109,20 @@ local env_dir_names = {"+", "-"}
 local steps_names = {"off"}
 for i = 1, 16 do steps_names[i + 1] = tostring(i) end
 
-local cd_subdiv_names = {"1/1","1/2","1/4","1/8","1/16"}
-local cd_subdiv_beats = {4, 2, 1, 0.5, 0.25}
+local fpv_subdiv_names = {"1/1","1/2","1/4","1/8","1/16"}
+local fpv_subdiv_beats = {4, 2, 1, 0.5, 0.25}
 
 -- =========================================================================
 -- formatters (following fx_llll patterns)
 -- =========================================================================
 
 local function fmt_pct(param) return param:get() .. " %" end
+local function fmt_pct_off(param)
+    local v = param:get()
+    if v == 0 then return "off" else return v .. " %" end
+end
 local function fmt_ms(param) return param:get() .. " ms" end
-local function fmt_deg(param) return math.floor(param:get() * 360 + 0.5) .. "°" end
+local function fmt_deg(param) return math.floor(param:get() * 3.6 + 0.5) .. "°" end
 
 local function fmt_hz(param)
     local v = param:get()
@@ -138,7 +141,7 @@ end
 -- =========================================================================
 
 local tm_param_ids = {}
-local rep_param_ids = {}
+local fpv_param_ids = {}
 local env_param_ids = {}
 local original_names = {}
 
@@ -201,22 +204,20 @@ local turing = {
     slew = 0,
 }
 
--- modulation™ repeater: derives values from the TM shift register,
--- but targets width/tilt (presentation domain).
-local repeater = {
-    target = REP_TARGET.WIDTH,
+-- familiar peaks & valleys: receives the waveform enthusiast's dynamics
+-- and echoes them onto width/tilt at diminishing strength.
+local fpv = {
+    target = FPV_TARGET.WIDTH,
     repeats = 0,
     fade = 75,
-    subdiv = 3,           -- index into cd_subdiv_beats
+    subdiv = 3,           -- index into fpv_subdiv_beats
     depth = 100,
     direction = -1,
     echo_clocks = {},
-    last_raw = 0,         -- most recent raw value, available to ENV
 }
 
 local env = {
     target = ENV_TARGET.DECAY,
-    source = ENV_SOURCE.AUDIO,
     sensitivity = 0,
     direction = 1,
     slew = 100,           -- ms
@@ -288,53 +289,58 @@ local function tm_restore(target)
 end
 
 -- =========================================================================
--- modulation™ repeater
+-- familiar peaks & valleys
 -- =========================================================================
 
-local function cancel_echoes()
-    for _, id in ipairs(repeater.echo_clocks) do
+local function fpv_cancel_echoes()
+    for _, id in ipairs(fpv.echo_clocks) do
         clock.cancel(id)
     end
-    repeater.echo_clocks = {}
+    fpv.echo_clocks = {}
 end
 
---- Apply repeater value to its own target (width or tilt).
-local function rep_apply(raw, strength)
-    local info = rep_target_info[repeater.target]
-    send_modulated(info, raw, strength, repeater.depth, repeater.direction)
+--- Apply fpv value to its own target (width or tilt).
+local function fpv_apply(raw, strength)
+    local info = fpv_target_info[fpv.target]
+    send_modulated(info, raw, strength, fpv.depth, fpv.direction)
 end
 
---- Schedule echoes for the repeater's own target.
--- Each echo applies the TM's raw register value at diminishing strength.
-local function schedule_echoes(raw)
-    if repeater.repeats <= 0 then return end
-    local beats = cd_subdiv_beats[repeater.subdiv]
-    local fade_factor = repeater.fade / 100
+--- Schedule echoes for the fpv's target.
+-- Each echo applies the amplitude value at diminishing strength.
+local function fpv_schedule_echoes(amplitude)
+    if fpv.repeats <= 0 then return end
+    local beats = fpv_subdiv_beats[fpv.subdiv]
+    local fade_factor = fpv.fade / 100
 
-    for i = 1, repeater.repeats do
+    for i = 1, fpv.repeats do
         local strength = fade_factor ^ i
         local delay_beats = beats * i
         local id = clock.run(function()
             clock.sync(delay_beats)
-            if tm_active() then
-                send("slew", turing.slew / 1000)
-                rep_apply(raw, strength)
-                -- Make echo value available to ENV if source = repeater
-                repeater.last_raw = raw * strength
-                if env.active and env.source == ENV_SOURCE.REPEATER then
-                    env_from_value(raw * strength)
-                end
+            if env.active then
+                send("slew", env.slew / 1000)
+                fpv_apply(amplitude, strength)
             end
         end)
-        table.insert(repeater.echo_clocks, id)
+        table.insert(fpv.echo_clocks, id)
     end
 end
 
+--- Called by the waveform enthusiast with each new amplitude value.
+-- Applies immediately at full strength, then schedules echoes.
+local function fpv_receive(amplitude)
+    if not env.active then return end
+    fpv_apply(amplitude, 1.0)
+    fpv_cancel_echoes()
+    fpv_schedule_echoes(amplitude)
+end
+
 -- =========================================================================
--- envelope follower
+-- waveform enthusiast
 -- =========================================================================
 
---- Core ENV mapping: takes a 0–1 value and applies it to ENV target.
+--- Core ENV mapping: takes a 0–1 amplitude and applies it to ENV target.
+-- Also feeds the amplitude to familiar peaks & valleys.
 local function env_from_value(amplitude)
     if not env.active then return end
     local info = env_target_info[env.target]
@@ -353,20 +359,15 @@ local function env_from_value(amplitude)
     val = math.max(info.lo, math.min(info.hi, val))
     send("slew", env.slew / 1000)
     send(info.sc, val)
+
+    -- Feed the amplitude to familiar peaks & valleys
+    fpv_receive(amplitude)
 end
 
 --- Called ~30x/sec with the current input amplitude from SC.
 local function env_receive_audio(amplitude)
     if not env.active then return end
-    if env.source ~= ENV_SOURCE.AUDIO then return end
     env_from_value(amplitude)
-end
-
---- Feed TM raw value to ENV (called when source = modulation™)
-local function env_feed_tm(raw)
-    if not env.active then return end
-    if env.source ~= ENV_SOURCE.TM then return end
-    env_from_value(raw)
 end
 
 local function start_env_osc()
@@ -382,14 +383,19 @@ end
 local function env_activate()
     env.active = true
     mark_ids(env_param_ids[env.target])
+    if fpv.repeats > 0 then mark_ids(fpv_param_ids[fpv.target]) end
     start_env_osc()
 end
 
 local function env_deactivate()
     env.active = false
+    fpv_cancel_echoes()
     local info = env_target_info[env.target]
     if info then send(info.sc, base[info.base]) end
     unmark_ids(env_param_ids[env.target])
+    -- Restore fpv target
+    local fpv_info = fpv_target_info[fpv.target]
+    if fpv_info then restore_info(fpv_info, fpv_param_ids[fpv.target]) end
 end
 
 -- =========================================================================
@@ -400,21 +406,8 @@ local function tm_apply()
     if not tm_active() then return end
     local m = reg_max(); if m == 0 then return end
     local raw = turing.register / m
-
     send("slew", turing.slew / 1000)
-
-    -- 1. Apply to TM's own target (character domain)
     tm_apply_target(raw)
-
-    -- 2. Apply to repeater's target immediately (strength 1.0)
-    --    then schedule echoes at diminishing strength
-    rep_apply(raw, 1.0)
-    cancel_echoes()
-    schedule_echoes(raw)
-
-    -- 3. Feed raw value to ENV if source = TM
-    repeater.last_raw = raw
-    env_feed_tm(raw)
 end
 
 local function tm_step()
@@ -448,16 +441,11 @@ end
 local function tm_activate()
     turing.register = math.random(0, reg_max())
     mark_ids(tm_param_ids[turing.target])
-    if repeater.repeats > 0 then mark_ids(rep_param_ids[repeater.target]) end
     start_tm_clock()
 end
 
 local function tm_deactivate()
-    cancel_echoes()
     tm_restore(turing.target)
-    -- Restore repeater target
-    local rep_info = rep_target_info[repeater.target]
-    if rep_info then restore_info(rep_info, rep_param_ids[repeater.target]) end
     if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
 end
 
@@ -467,7 +455,7 @@ end
 
 local function cleanup()
     if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
-    cancel_echoes()
+    fpv_cancel_echoes()
 end
 
 -- =========================================================================
@@ -551,16 +539,15 @@ function FxSlipstream:add_params()
     params:add_number("fx_ss_width", "width", 0, 200, 100, fmt_pct)
     params:set_action("fx_ss_width", function(v)
         base.width = v / 100
-        if not (tm_active() and repeater.repeats > 0 and repeater.target == REP_TARGET.WIDTH) then
+        if not (env.active and fpv.target == FPV_TARGET.WIDTH) then
             send("width", v / 100)
         end
     end)
 
-    -- tilt (-100 to +100, displayed as %, mapped to -1..+1)
     params:add_number("fx_ss_tilt", "tilt", -100, 100, 0, fmt_pct)
     params:set_action("fx_ss_tilt", function(v)
         base.tilt = v / 100
-        if not (tm_active() and repeater.repeats > 0 and repeater.target == REP_TARGET.TILT) then
+        if not (env.active and fpv.target == FPV_TARGET.TILT) then
             send("tilt", v / 100)
         end
     end)
@@ -636,59 +623,9 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
-    -- modulation™ repeater (presentation: width, tilt)
+    -- waveform enthusiast (amount: decay, input gain, saturation, mod depth)
     -- =====================================================================
-    params:add_separator("fx_ss_rep", "modulation™ repeater")
-
-    params:add_option("fx_ss_rep_target", "target", rep_target_names, REP_TARGET.WIDTH)
-    params:set_action("fx_ss_rep_target", function(v)
-        if tm_active() and repeater.repeats > 0 then
-            restore_info(rep_target_info[repeater.target], rep_param_ids[repeater.target])
-        end
-        repeater.target = v
-        if tm_active() and repeater.repeats > 0 then
-            mark_ids(rep_param_ids[v])
-        end
-    end)
-
-    local rep_repeats_names = {"off", "1", "2", "3", "4"}
-    params:add_option("fx_ss_rep_repeats", "repeats", rep_repeats_names, 1)
-    params:set_action("fx_ss_rep_repeats", function(v)
-        local was = repeater.repeats > 0
-        repeater.repeats = v - 1
-        if v == 1 then
-            cancel_echoes()
-            if was then
-                restore_info(rep_target_info[repeater.target], rep_param_ids[repeater.target])
-            end
-        elseif tm_active() then
-            mark_ids(rep_param_ids[repeater.target])
-        end
-    end)
-
-    params:add_number("fx_ss_rep_fade", "repeats fade", 0, 100, 75, fmt_pct)
-    params:set_action("fx_ss_rep_fade", function(v) repeater.fade = v end)
-
-    params:add_option("fx_ss_rep_subdiv", "repeats subdiv", cd_subdiv_names, 3)
-    params:set_action("fx_ss_rep_subdiv", function(v) repeater.subdiv = v end)
-
-    params:add_number("fx_ss_rep_depth", "mod depth", 0, 100, 100, fmt_pct)
-    params:set_action("fx_ss_rep_depth", function(v) repeater.depth = v end)
-
-    params:add_option("fx_ss_rep_dir", "mod direction", dir_names, 2)
-    params:set_action("fx_ss_rep_dir", function(v)
-        if v == 1 then repeater.direction = 1
-        elseif v == 2 then repeater.direction = -1
-        else repeater.direction = 0 end
-    end)
-
-    -- =====================================================================
-    -- envelope follower (amount: decay, input gain, saturation, mod depth)
-    -- =====================================================================
-    params:add_separator("fx_ss_env", "envelope follower")
-
-    params:add_option("fx_ss_env_source", "source", env_source_names, ENV_SOURCE.AUDIO)
-    params:set_action("fx_ss_env_source", function(v) env.source = v end)
+    params:add_separator("fx_ss_env", "waveform enthusiast")
 
     params:add_option("fx_ss_env_target", "target", env_target_names, ENV_TARGET.DECAY)
     params:set_action("fx_ss_env_target", function(v)
@@ -698,7 +635,7 @@ function FxSlipstream:add_params()
         if was_active then env_activate() end
     end)
 
-    params:add_number("fx_ss_env_sensitivity", "sensitivity", 0, 100, 0, fmt_pct)
+    params:add_number("fx_ss_env_sensitivity", "sensitivity", 0, 100, 0, fmt_pct_off)
     params:set_action("fx_ss_env_sensitivity", function(v)
         env.sensitivity = v
         if v > 0 and not env.active then env_activate()
@@ -724,6 +661,49 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
+    -- familiar peaks & valleys (presentation: width, tilt)
+    -- Receives dynamics from the waveform enthusiast and echoes them.
+    -- =====================================================================
+    params:add_separator("fx_ss_fpv", "familiar peaks & valleys")
+
+    params:add_option("fx_ss_fpv_target", "target", fpv_target_names, FPV_TARGET.WIDTH)
+    params:set_action("fx_ss_fpv_target", function(v)
+        if env.active then
+            restore_info(fpv_target_info[fpv.target], fpv_param_ids[fpv.target])
+        end
+        fpv.target = v
+        if env.active then
+            mark_ids(fpv_param_ids[v])
+        end
+    end)
+
+    local fpv_repeats_names = {"off", "1", "2", "3", "4"}
+    params:add_option("fx_ss_fpv_repeats", "repeats", fpv_repeats_names, 1)
+    params:set_action("fx_ss_fpv_repeats", function(v)
+        local was = fpv.repeats > 0
+        fpv.repeats = v - 1
+        if v == 1 then
+            fpv_cancel_echoes()
+        end
+    end)
+
+    params:add_number("fx_ss_fpv_fade", "repeats fade", 0, 100, 75, fmt_pct)
+    params:set_action("fx_ss_fpv_fade", function(v) fpv.fade = v end)
+
+    params:add_option("fx_ss_fpv_subdiv", "repeats subdiv", fpv_subdiv_names, 3)
+    params:set_action("fx_ss_fpv_subdiv", function(v) fpv.subdiv = v end)
+
+    params:add_number("fx_ss_fpv_depth", "mod depth", 0, 100, 100, fmt_pct)
+    params:set_action("fx_ss_fpv_depth", function(v) fpv.depth = v end)
+
+    params:add_option("fx_ss_fpv_dir", "mod direction", dir_names, 2)
+    params:set_action("fx_ss_fpv_dir", function(v)
+        if v == 1 then fpv.direction = 1
+        elseif v == 2 then fpv.direction = -1
+        else fpv.direction = 0 end
+    end)
+
+    -- =====================================================================
     -- populate (M) marker maps
     -- =====================================================================
 
@@ -733,8 +713,8 @@ function FxSlipstream:add_params()
     tm_param_ids[TM_TARGET.MOD_PHASE] = {"fx_ss_mod_phase"}
     tm_param_ids[TM_TARGET.DIFFUSION] = {"fx_ss_diffusion"}
 
-    rep_param_ids[REP_TARGET.WIDTH] = {"fx_ss_width"}
-    rep_param_ids[REP_TARGET.TILT]  = {"fx_ss_tilt"}
+    fpv_param_ids[FPV_TARGET.WIDTH] = {"fx_ss_width"}
+    fpv_param_ids[FPV_TARGET.TILT]  = {"fx_ss_tilt"}
 
     env_param_ids[ENV_TARGET.DECAY]      = {"fx_ss_decay"}
     env_param_ids[ENV_TARGET.INPUT_GAIN] = {"fx_ss_input_gain"}
