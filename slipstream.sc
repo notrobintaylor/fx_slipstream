@@ -1,5 +1,5 @@
 // =========================================================================
-// FxSlipstream — creative reverb with modulation
+// FxReflex — creative reverb with modulation
 // =========================================================================
 //
 // A plate-class reverb based on Dattorro's topology (AES 1997),
@@ -8,7 +8,7 @@
 // No external UGens required.
 // =========================================================================
 
-FxSlipstream : FxBase {
+FxReflex : FxBase {
 
     *new {
         var ret = super.newCopyArgs(nil, \none, (
@@ -34,11 +34,11 @@ FxSlipstream : FxBase {
     }
 
     *initClass { FxSetup.register(this.new); }
-    subPath { ^"/fx_slipstream"; }
-    symbol { ^\fxSlipstream; }
+    subPath { ^"/fx_reflex"; }
+    symbol { ^\fxReflex; }
 
     addSynthdefs {
-        SynthDef(\fxSlipstream, {|inBus, outBus|
+        SynthDef(\fxReflex, {|inBus, outBus|
 
             // ---- ALL VAR DECLARATIONS (SC requires these at block top) ----
             var dSR = 29761;
@@ -91,7 +91,7 @@ FxSlipstream : FxBase {
             var mid, side, tiltAbs, wet, wetLP, wetHP;
 
             // ---- ENVELOPE FOLLOWER → LUA ----
-            SendReply.kr(Impulse.kr(30), '/fx_slipstream/env', envFollow);
+            SendReply.kr(Impulse.kr(30), '/fx_reflex/env', envFollow);
 
             // ---- PREDELAY → BANDWIDTH ----
             mono = DelayN.ar(mono, 0.5, \preDelay.kr(0.1).lag(0.1));
