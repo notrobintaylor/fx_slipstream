@@ -1,5 +1,5 @@
 -- =========================================================================
--- fx_slipstream — creative reverb with modulation
+-- fx_reflex — creative reverb with modulation
 -- for the norns fx mod framework
 --
 -- Three specialized modulators, each with its own domain:
@@ -7,13 +7,13 @@
 --   modulation™: character (how the reverb sounds)
 --     damping, size, spread, mod phase, input diffusion
 --
---   waveform enthusiast: amount (how much)
+--   envelope follower: amount (how much)
 --     decay, input gain, saturation, mod depth
---     Tracks input amplitude. Feeds values to familiar peaks & valleys.
+--     Tracks input amplitude. Feeds values to envelope repeater.
 --
---   familiar peaks & valleys: presentation (how you perceive the output)
+--   envelope repeater: presentation (how you perceive the output)
 --     width, tilt
---     Receives the waveform enthusiast's dynamics and echoes them
+--     Receives the envelope follower's dynamics and echoes them
 --     at diminishing strength. The peaks and valleys of your playing
 --     ripple through the stereo image and spectrum, increasingly
 --     approximate with each repetition.
@@ -53,7 +53,7 @@ if hook.script_post_init == nil and mod.hook.patched == nil then
     end)
 end
 
-local FxSlipstream = fx:new{ subpath = "/fx_slipstream" }
+local FxReflex = fx:new{ subpath = "/fx_reflex" }
 
 -- =========================================================================
 -- constants
@@ -74,19 +74,19 @@ local tm_target_info = {
     [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95  },
 }
 
--- familiar peaks & valleys targets: presentation (how you perceive the output)
-local FPV_TARGET = {
+-- envelope repeater targets: presentation (how you perceive the output)
+local ERP_TARGET = {
     WIDTH=1, TILT=2
 }
-local fpv_target_names = {
+local erp_target_names = {
     "width", "tilt"
 }
-local fpv_target_info = {
-    [FPV_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
-    [FPV_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
+local erp_target_info = {
+    [ERP_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
+    [ERP_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
 }
 
--- waveform enthusiast targets: amount (how much)
+-- envelope follower targets: amount (how much)
 local ENV_TARGET = {
     DECAY=1, INPUT_GAIN=2, SATURATION=3, MOD_DEPTH=4
 }
@@ -109,8 +109,8 @@ local env_dir_names = {"+", "-"}
 local steps_names = {"off"}
 for i = 1, 16 do steps_names[i + 1] = tostring(i) end
 
-local fpv_subdiv_names = {"1/1","1/2","1/4","1/8","1/16"}
-local fpv_subdiv_beats = {4, 2, 1, 0.5, 0.25}
+local erp_subdiv_names = {"1/1","1/2","1/4","1/8","1/16"}
+local erp_subdiv_beats = {4, 2, 1, 0.5, 0.25}
 
 -- =========================================================================
 -- formatters (following fx_llll patterns)
@@ -141,7 +141,7 @@ end
 -- =========================================================================
 
 local tm_param_ids = {}
-local fpv_param_ids = {}
+local erp_param_ids = {}
 local env_param_ids = {}
 local original_names = {}
 
@@ -204,13 +204,13 @@ local turing = {
     slew = 0,
 }
 
--- familiar peaks & valleys: receives the waveform enthusiast's dynamics
+-- envelope repeater: receives the envelope follower's dynamics
 -- and echoes them onto width/tilt at diminishing strength.
 local fpv = {
-    target = FPV_TARGET.WIDTH,
+    target = ERP_TARGET.WIDTH,
     repeats = 0,
     fade = 75,
-    subdiv = 3,           -- index into fpv_subdiv_beats
+    subdiv = 3,           -- index into erp_subdiv_beats
     depth = 100,
     direction = -1,
     echo_clocks = {},
@@ -231,7 +231,7 @@ local tm_clock_id = nil
 -- =========================================================================
 
 local function send(key, val)
-    osc.send({"localhost", 57120}, "/fx_slipstream/set", {key, val})
+    osc.send({"localhost", 57120}, "/fx_reflex/set", {key, val})
 end
 
 local function tm_active() return turing.steps > 0 end
@@ -289,58 +289,58 @@ local function tm_restore(target)
 end
 
 -- =========================================================================
--- familiar peaks & valleys
+-- envelope repeater
 -- =========================================================================
 
-local function fpv_cancel_echoes()
-    for _, id in ipairs(fpv.echo_clocks) do
+local function erp_cancel_echoes()
+    for _, id in ipairs(erp.echo_clocks) do
         clock.cancel(id)
     end
-    fpv.echo_clocks = {}
+    erp.echo_clocks = {}
 end
 
 --- Apply fpv value to its own target (width or tilt).
-local function fpv_apply(raw, strength)
-    local info = fpv_target_info[fpv.target]
-    send_modulated(info, raw, strength, fpv.depth, fpv.direction)
+local function erp_apply(raw, strength)
+    local info = erp_target_info[erp.target]
+    send_modulated(info, raw, strength, erp.depth, erp.direction)
 end
 
 --- Schedule echoes for the fpv's target.
 -- Each echo applies the amplitude value at diminishing strength.
-local function fpv_schedule_echoes(amplitude)
-    if fpv.repeats <= 0 then return end
-    local beats = fpv_subdiv_beats[fpv.subdiv]
-    local fade_factor = fpv.fade / 100
+local function erp_schedule_echoes(amplitude)
+    if erp.repeats <= 0 then return end
+    local beats = erp_subdiv_beats[erp.subdiv]
+    local fade_factor = erp.fade / 100
 
-    for i = 1, fpv.repeats do
+    for i = 1, erp.repeats do
         local strength = fade_factor ^ i
         local delay_beats = beats * i
         local id = clock.run(function()
             clock.sync(delay_beats)
             if env.active then
                 send("slew", env.slew / 1000)
-                fpv_apply(amplitude, strength)
+                erp_apply(amplitude, strength)
             end
         end)
-        table.insert(fpv.echo_clocks, id)
+        table.insert(erp.echo_clocks, id)
     end
 end
 
---- Called by the waveform enthusiast with each new amplitude value.
+--- Called by the envelope follower with each new amplitude value.
 -- Applies immediately at full strength, then schedules echoes.
-local function fpv_receive(amplitude)
+local function erp_receive(amplitude)
     if not env.active then return end
-    fpv_apply(amplitude, 1.0)
-    fpv_cancel_echoes()
-    fpv_schedule_echoes(amplitude)
+    erp_apply(amplitude, 1.0)
+    erp_cancel_echoes()
+    erp_schedule_echoes(amplitude)
 end
 
 -- =========================================================================
--- waveform enthusiast
+-- envelope follower
 -- =========================================================================
 
 --- Core ENV mapping: takes a 0–1 amplitude and applies it to ENV target.
--- Also feeds the amplitude to familiar peaks & valleys.
+-- Also feeds the amplitude to envelope repeater.
 local function env_from_value(amplitude)
     if not env.active then return end
     local info = env_target_info[env.target]
@@ -360,8 +360,8 @@ local function env_from_value(amplitude)
     send("slew", env.slew / 1000)
     send(info.sc, val)
 
-    -- Feed the amplitude to familiar peaks & valleys
-    fpv_receive(amplitude)
+    -- Feed the amplitude to envelope repeater
+    erp_receive(amplitude)
 end
 
 --- Called ~30x/sec with the current input amplitude from SC.
@@ -373,7 +373,7 @@ end
 local function start_env_osc()
     local old_osc = _norns.osc.event
     _norns.osc.event = function(path, args, from)
-        if path == '/fx_slipstream/env' and args and #args >= 3 then
+        if path == '/fx_reflex/env' and args and #args >= 3 then
             env_receive_audio(args[3])
         end
         if old_osc then old_osc(path, args, from) end
@@ -383,19 +383,19 @@ end
 local function env_activate()
     env.active = true
     mark_ids(env_param_ids[env.target])
-    if fpv.repeats > 0 then mark_ids(fpv_param_ids[fpv.target]) end
+    if erp.repeats > 0 then mark_ids(erp_param_ids[erp.target]) end
     start_env_osc()
 end
 
 local function env_deactivate()
     env.active = false
-    fpv_cancel_echoes()
+    erp_cancel_echoes()
     local info = env_target_info[env.target]
     if info then send(info.sc, base[info.base]) end
     unmark_ids(env_param_ids[env.target])
     -- Restore fpv target
-    local fpv_info = fpv_target_info[fpv.target]
-    if fpv_info then restore_info(fpv_info, fpv_param_ids[fpv.target]) end
+    local erp_info = erp_target_info[erp.target]
+    if erp_info then restore_info(erp_info, erp_param_ids[erp.target]) end
 end
 
 -- =========================================================================
@@ -455,48 +455,48 @@ end
 
 local function cleanup()
     if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
-    fpv_cancel_echoes()
+    erp_cancel_echoes()
 end
 
 -- =========================================================================
 -- parameters
 -- =========================================================================
 
-function FxSlipstream:add_params()
+function FxReflex:add_params()
 
     -- slot --
-    params:add_separator("fx_ss", "fx slipstream")
-    FxSlipstream:add_slot("fx_ss_slot", "slot")
+    params:add_separator("fx_rx", "fx reflex")
+    FxReflex:add_slot("fx_rx_slot", "slot")
 
     -- =====================================================================
     -- reverb
     -- =====================================================================
-    params:add_separator("fx_ss_reverb", "reverb")
+    params:add_separator("fx_rx_reverb", "reverb")
 
-    params:add_number("fx_ss_predelay", "predelay", 0, 500, 100, fmt_ms)
-    params:set_action("fx_ss_predelay", function(v)
+    params:add_number("fx_rx_predelay", "predelay", 0, 500, 100, fmt_ms)
+    params:set_action("fx_rx_predelay", function(v)
         base.preDelay = v / 1000
         send("preDelay", v / 1000)
     end)
 
-    params:add_number("fx_ss_input_gain", "input gain", 0, 100, 100, fmt_pct)
-    params:set_action("fx_ss_input_gain", function(v)
+    params:add_number("fx_rx_input_gain", "input gain", 0, 100, 100, fmt_pct)
+    params:set_action("fx_rx_input_gain", function(v)
         base.inputGain = v / 100
         if not (env.active and env.target == ENV_TARGET.INPUT_GAIN) then
             send("inputGain", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_decay", "decay", 0, 100, 50, fmt_pct)
-    params:set_action("fx_ss_decay", function(v)
+    params:add_number("fx_rx_decay", "decay", 0, 100, 50, fmt_pct)
+    params:set_action("fx_rx_decay", function(v)
         base.decay = v / 100
         if not (env.active and env.target == ENV_TARGET.DECAY) then
             send("decay", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_damping", "damping", 0, 100, 25, fmt_pct)
-    params:set_action("fx_ss_damping", function(v)
+    params:add_number("fx_rx_damping", "damping", 0, 100, 25, fmt_pct)
+    params:set_action("fx_rx_damping", function(v)
         local coef = pct_to_damping_coef(v)
         base.damping = coef
         if not (tm_active() and turing.target == TM_TARGET.DAMPING) then
@@ -504,50 +504,50 @@ function FxSlipstream:add_params()
         end
     end)
 
-    params:add_number("fx_ss_saturation", "saturation", 0, 100, 0, fmt_pct)
-    params:set_action("fx_ss_saturation", function(v)
+    params:add_number("fx_rx_saturation", "saturation", 0, 100, 0, fmt_pct)
+    params:set_action("fx_rx_saturation", function(v)
         base.saturation = v / 100
         if not (env.active and env.target == ENV_TARGET.SATURATION) then
             send("saturation", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_diffusion", "input diffusion", 0, 100, 75, fmt_pct)
-    params:set_action("fx_ss_diffusion", function(v)
+    params:add_number("fx_rx_diffusion", "input diffusion", 0, 100, 75, fmt_pct)
+    params:set_action("fx_rx_diffusion", function(v)
         base.inputDiffusion = v / 100
         if not (tm_active() and turing.target == TM_TARGET.DIFFUSION) then
             send("inputDiffusion", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_size", "size", 10, 300, 100, fmt_x)
-    params:set_action("fx_ss_size", function(v)
+    params:add_number("fx_rx_size", "size", 10, 300, 100, fmt_x)
+    params:set_action("fx_rx_size", function(v)
         base.size = v / 100
         if not (tm_active() and turing.target == TM_TARGET.SIZE) then
             send("size", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_spread", "spread", 0, 200, 100, fmt_x)
-    params:set_action("fx_ss_spread", function(v)
+    params:add_number("fx_rx_spread", "spread", 0, 200, 100, fmt_x)
+    params:set_action("fx_rx_spread", function(v)
         base.spread = v / 100
         if not (tm_active() and turing.target == TM_TARGET.SPREAD) then
             send("spread", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_width", "width", 0, 200, 100, fmt_pct)
-    params:set_action("fx_ss_width", function(v)
+    params:add_number("fx_rx_width", "width", 0, 200, 100, fmt_pct)
+    params:set_action("fx_rx_width", function(v)
         base.width = v / 100
-        if not (env.active and fpv.target == FPV_TARGET.WIDTH) then
+        if not (env.active and erp.target == ERP_TARGET.WIDTH) then
             send("width", v / 100)
         end
     end)
 
-    params:add_number("fx_ss_tilt", "tilt", -100, 100, 0, fmt_pct)
-    params:set_action("fx_ss_tilt", function(v)
+    params:add_number("fx_rx_tilt", "tilt", -100, 100, 0, fmt_pct)
+    params:set_action("fx_rx_tilt", function(v)
         base.tilt = v / 100
-        if not (env.active and fpv.target == FPV_TARGET.TILT) then
+        if not (env.active and erp.target == ERP_TARGET.TILT) then
             send("tilt", v / 100)
         end
     end)
@@ -555,25 +555,25 @@ function FxSlipstream:add_params()
     -- =====================================================================
     -- tank modulation
     -- =====================================================================
-    params:add_separator("fx_ss_mod", "tank modulation")
+    params:add_separator("fx_rx_mod", "tank modulation")
 
-    params:add_number("fx_ss_mod_depth", "mod depth", 0, 100, 0, fmt_pct)
-    params:set_action("fx_ss_mod_depth", function(v)
+    params:add_number("fx_rx_mod_depth", "mod depth", 0, 100, 0, fmt_pct)
+    params:set_action("fx_rx_mod_depth", function(v)
         base.modDepth = v / 100
         if not (env.active and env.target == ENV_TARGET.MOD_DEPTH) then
             send("modDepth", v / 100)
         end
     end)
 
-    params:add_control("fx_ss_mod_rate", "mod rate",
+    params:add_control("fx_rx_mod_rate", "mod rate",
         controlspec.new(0.01, 10000, 'exp', 0, 1.0, "hz"), fmt_hz)
-    params:set_action("fx_ss_mod_rate", function(v)
+    params:set_action("fx_rx_mod_rate", function(v)
         base.modRate = v
         send("modRate", v)
     end)
 
-    params:add_number("fx_ss_mod_phase", "mod phase", 0, 100, 50, fmt_deg)
-    params:set_action("fx_ss_mod_phase", function(v)
+    params:add_number("fx_rx_mod_phase", "mod phase", 0, 100, 50, fmt_deg)
+    params:set_action("fx_rx_mod_phase", function(v)
         base.modPhase = v / 100
         if not (tm_active() and turing.target == TM_TARGET.MOD_PHASE) then
             send("modPhase", v / 100)
@@ -583,39 +583,39 @@ function FxSlipstream:add_params()
     -- =====================================================================
     -- modulation™ (character: damping, size, spread, mod phase, diffusion)
     -- =====================================================================
-    params:add_separator("fx_ss_tm", "modulation™")
+    params:add_separator("fx_rx_tm", "modulation™")
 
-    params:add_option("fx_ss_tm_assign", "mod assign", tm_target_names, TM_TARGET.SIZE)
-    params:set_action("fx_ss_tm_assign", function(v)
+    params:add_option("fx_rx_tm_assign", "mod assign", tm_target_names, TM_TARGET.SIZE)
+    params:set_action("fx_rx_tm_assign", function(v)
         if tm_active() then tm_restore(turing.prev_target) end
         turing.prev_target = v; turing.target = v
         if tm_active() then tm_activate() end
     end)
 
-    params:add_number("fx_ss_tm_mod_depth", "mod depth", 0, 100, 100, fmt_pct)
-    params:set_action("fx_ss_tm_mod_depth", function(v) turing.depth = v end)
+    params:add_number("fx_rx_tm_mod_depth", "mod depth", 0, 100, 100, fmt_pct)
+    params:set_action("fx_rx_tm_mod_depth", function(v) turing.depth = v end)
 
-    params:add_option("fx_ss_tm_mod_dir", "mod direction", dir_names, 2)
-    params:set_action("fx_ss_tm_mod_dir", function(v)
+    params:add_option("fx_rx_tm_mod_dir", "mod direction", dir_names, 2)
+    params:set_action("fx_rx_tm_mod_dir", function(v)
         if v == 1 then turing.direction = 1
         elseif v == 2 then turing.direction = -1
         else turing.direction = 0 end
     end)
 
-    params:add_number("fx_ss_tm_slew", "slew rate", 0, 2000, 0, fmt_ms)
-    params:set_action("fx_ss_tm_slew", function(v) turing.slew = v end)
+    params:add_number("fx_rx_tm_slew", "slew rate", 0, 2000, 0, fmt_ms)
+    params:set_action("fx_rx_tm_slew", function(v) turing.slew = v end)
 
-    params:add_option("fx_ss_tm_step_rate", "step rate", step_rate_names, 5)
-    params:set_action("fx_ss_tm_step_rate", function(v)
+    params:add_option("fx_rx_tm_step_rate", "step rate", step_rate_names, 5)
+    params:set_action("fx_rx_tm_step_rate", function(v)
         turing.clock_div = v
         if tm_active() then start_tm_clock() end
     end)
 
-    params:add_number("fx_ss_tm_stability", "step stability", 0, 100, 50, fmt_pct)
-    params:set_action("fx_ss_tm_stability", function(v) turing.stability = v end)
+    params:add_number("fx_rx_tm_stability", "step stability", 0, 100, 50, fmt_pct)
+    params:set_action("fx_rx_tm_stability", function(v) turing.stability = v end)
 
-    params:add_option("fx_ss_tm_steps", "steps", steps_names, 1)
-    params:set_action("fx_ss_tm_steps", function(v)
+    params:add_option("fx_rx_tm_steps", "steps", steps_names, 1)
+    params:set_action("fx_rx_tm_steps", function(v)
         local was = tm_active()
         turing.steps = v - 1
         if tm_active() then tm_activate()
@@ -623,103 +623,103 @@ function FxSlipstream:add_params()
     end)
 
     -- =====================================================================
-    -- waveform enthusiast (amount: decay, input gain, saturation, mod depth)
+    -- envelope follower (amount: decay, input gain, saturation, mod depth)
     -- =====================================================================
-    params:add_separator("fx_ss_env", "waveform enthusiast")
+    params:add_separator("fx_rx_env", "envelope follower")
 
-    params:add_option("fx_ss_env_target", "target", env_target_names, ENV_TARGET.DECAY)
-    params:set_action("fx_ss_env_target", function(v)
+    params:add_option("fx_rx_env_target", "target", env_target_names, ENV_TARGET.DECAY)
+    params:set_action("fx_rx_env_target", function(v)
         local was_active = env.active
         if was_active then env_deactivate() end
         env.target = v
         if was_active then env_activate() end
     end)
 
-    params:add_number("fx_ss_env_sensitivity", "sensitivity", 0, 100, 0, fmt_pct_off)
-    params:set_action("fx_ss_env_sensitivity", function(v)
+    params:add_number("fx_rx_env_sensitivity", "sensitivity", 0, 100, 0, fmt_pct_off)
+    params:set_action("fx_rx_env_sensitivity", function(v)
         env.sensitivity = v
         if v > 0 and not env.active then env_activate()
         elseif v == 0 and env.active then env_deactivate() end
     end)
 
-    params:add_option("fx_ss_env_dir", "direction", env_dir_names, 1)
-    params:set_action("fx_ss_env_dir", function(v)
+    params:add_option("fx_rx_env_dir", "direction", env_dir_names, 1)
+    params:set_action("fx_rx_env_dir", function(v)
         if v == 1 then env.direction = 1 else env.direction = -1 end
     end)
 
-    params:add_number("fx_ss_env_slew", "slew rate", 0, 2000, 100, fmt_ms)
-    params:set_action("fx_ss_env_slew", function(v) env.slew = v end)
+    params:add_number("fx_rx_env_slew", "slew rate", 0, 2000, 100, fmt_ms)
+    params:set_action("fx_rx_env_slew", function(v) env.slew = v end)
 
-    params:add_number("fx_ss_env_attack", "attack", 1, 1000, 10, fmt_ms)
-    params:set_action("fx_ss_env_attack", function(v)
+    params:add_number("fx_rx_env_attack", "attack", 1, 1000, 10, fmt_ms)
+    params:set_action("fx_rx_env_attack", function(v)
         send("envAttack", v / 1000)
     end)
 
-    params:add_number("fx_ss_env_release", "release", 10, 2000, 100, fmt_ms)
-    params:set_action("fx_ss_env_release", function(v)
+    params:add_number("fx_rx_env_release", "release", 10, 2000, 100, fmt_ms)
+    params:set_action("fx_rx_env_release", function(v)
         send("envRelease", v / 1000)
     end)
 
     -- =====================================================================
-    -- familiar peaks & valleys (presentation: width, tilt)
-    -- Receives dynamics from the waveform enthusiast and echoes them.
+    -- envelope repeater (presentation: width, tilt)
+    -- Receives dynamics from the envelope follower and echoes them.
     -- =====================================================================
-    params:add_separator("fx_ss_fpv", "familiar peaks & valleys")
+    params:add_separator("fx_rx_fpv", "envelope repeater")
 
-    params:add_option("fx_ss_fpv_target", "target", fpv_target_names, FPV_TARGET.WIDTH)
-    params:set_action("fx_ss_fpv_target", function(v)
+    params:add_option("fx_rx_erp_target", "target", erp_target_names, ERP_TARGET.WIDTH)
+    params:set_action("fx_rx_erp_target", function(v)
         if env.active then
-            restore_info(fpv_target_info[fpv.target], fpv_param_ids[fpv.target])
+            restore_info(erp_target_info[erp.target], erp_param_ids[erp.target])
         end
-        fpv.target = v
+        erp.target = v
         if env.active then
-            mark_ids(fpv_param_ids[v])
+            mark_ids(erp_param_ids[v])
         end
     end)
 
-    local fpv_repeats_names = {"off", "1", "2", "3", "4"}
-    params:add_option("fx_ss_fpv_repeats", "repeats", fpv_repeats_names, 1)
-    params:set_action("fx_ss_fpv_repeats", function(v)
-        local was = fpv.repeats > 0
-        fpv.repeats = v - 1
+    local erp_repeats_names = {"off", "1", "2", "3", "4"}
+    params:add_option("fx_rx_erp_repeats", "repeats", erp_repeats_names, 1)
+    params:set_action("fx_rx_erp_repeats", function(v)
+        local was = erp.repeats > 0
+        erp.repeats = v - 1
         if v == 1 then
-            fpv_cancel_echoes()
+            erp_cancel_echoes()
         end
     end)
 
-    params:add_number("fx_ss_fpv_fade", "repeats fade", 0, 100, 75, fmt_pct)
-    params:set_action("fx_ss_fpv_fade", function(v) fpv.fade = v end)
+    params:add_number("fx_rx_erp_fade", "repeats fade", 0, 100, 75, fmt_pct)
+    params:set_action("fx_rx_erp_fade", function(v) erp.fade = v end)
 
-    params:add_option("fx_ss_fpv_subdiv", "repeats subdiv", fpv_subdiv_names, 3)
-    params:set_action("fx_ss_fpv_subdiv", function(v) fpv.subdiv = v end)
+    params:add_option("fx_rx_erp_subdiv", "repeats subdiv", erp_subdiv_names, 3)
+    params:set_action("fx_rx_erp_subdiv", function(v) erp.subdiv = v end)
 
-    params:add_number("fx_ss_fpv_depth", "mod depth", 0, 100, 100, fmt_pct)
-    params:set_action("fx_ss_fpv_depth", function(v) fpv.depth = v end)
+    params:add_number("fx_rx_erp_depth", "mod depth", 0, 100, 100, fmt_pct)
+    params:set_action("fx_rx_erp_depth", function(v) erp.depth = v end)
 
-    params:add_option("fx_ss_fpv_dir", "mod direction", dir_names, 2)
-    params:set_action("fx_ss_fpv_dir", function(v)
-        if v == 1 then fpv.direction = 1
-        elseif v == 2 then fpv.direction = -1
-        else fpv.direction = 0 end
+    params:add_option("fx_rx_erp_dir", "mod direction", dir_names, 2)
+    params:set_action("fx_rx_erp_dir", function(v)
+        if v == 1 then erp.direction = 1
+        elseif v == 2 then erp.direction = -1
+        else erp.direction = 0 end
     end)
 
     -- =====================================================================
     -- populate (M) marker maps
     -- =====================================================================
 
-    tm_param_ids[TM_TARGET.DAMPING]   = {"fx_ss_damping"}
-    tm_param_ids[TM_TARGET.SIZE]      = {"fx_ss_size"}
-    tm_param_ids[TM_TARGET.SPREAD]    = {"fx_ss_spread"}
-    tm_param_ids[TM_TARGET.MOD_PHASE] = {"fx_ss_mod_phase"}
-    tm_param_ids[TM_TARGET.DIFFUSION] = {"fx_ss_diffusion"}
+    tm_param_ids[TM_TARGET.DAMPING]   = {"fx_rx_damping"}
+    tm_param_ids[TM_TARGET.SIZE]      = {"fx_rx_size"}
+    tm_param_ids[TM_TARGET.SPREAD]    = {"fx_rx_spread"}
+    tm_param_ids[TM_TARGET.MOD_PHASE] = {"fx_rx_mod_phase"}
+    tm_param_ids[TM_TARGET.DIFFUSION] = {"fx_rx_diffusion"}
 
-    fpv_param_ids[FPV_TARGET.WIDTH] = {"fx_ss_width"}
-    fpv_param_ids[FPV_TARGET.TILT]  = {"fx_ss_tilt"}
+    erp_param_ids[ERP_TARGET.WIDTH] = {"fx_rx_width"}
+    erp_param_ids[ERP_TARGET.TILT]  = {"fx_rx_tilt"}
 
-    env_param_ids[ENV_TARGET.DECAY]      = {"fx_ss_decay"}
-    env_param_ids[ENV_TARGET.INPUT_GAIN] = {"fx_ss_input_gain"}
-    env_param_ids[ENV_TARGET.SATURATION] = {"fx_ss_saturation"}
-    env_param_ids[ENV_TARGET.MOD_DEPTH]  = {"fx_ss_mod_depth"}
+    env_param_ids[ENV_TARGET.DECAY]      = {"fx_rx_decay"}
+    env_param_ids[ENV_TARGET.INPUT_GAIN] = {"fx_rx_input_gain"}
+    env_param_ids[ENV_TARGET.SATURATION] = {"fx_rx_saturation"}
+    env_param_ids[ENV_TARGET.MOD_DEPTH]  = {"fx_rx_mod_depth"}
 
     start_env_osc()
 end
@@ -728,14 +728,14 @@ end
 -- hooks
 -- =========================================================================
 
-mod.hook.register("script_post_init", "fx slipstream post init", function()
-    FxSlipstream:add_params()
+mod.hook.register("script_post_init", "fx reflex post init", function()
+    FxReflex:add_params()
 end)
 
-mod.hook.register("script_post_cleanup", "fx slipstream cleanup", function()
+mod.hook.register("script_post_cleanup", "fx reflex cleanup", function()
     if env.active then env_deactivate() end
     if tm_active() then tm_deactivate() end
     cleanup()
 end)
 
-return FxSlipstream
+return FxReflex
