@@ -271,6 +271,24 @@ Receives the envelope follower's dynamics and echoes them onto the presentation 
 
 ---
 
+## User stories
+
+### 1.0
+
+**Slot management**
+
+- I want send a and send b to work independently of the fx mod so that I can route the reverb to the norns send buses without the fx framework's replacer synth being involved.
+
+- I want the insert dry/wet blend to follow an equal power curve (cosine for dry, sine for wet) so that the perceived loudness stays constant at any blend position — no −3 dB dip at 50%.
+
+- I want slot switching to be click-free so that changing between none, send a, send b, and insert during a live performance is sonically transparent.
+
+- I want a short fade on the fx send level when switching slots so that the audio transitions smoothly without abrupt gain changes on the send bus.
+
+- I want fx spillover when I deselect a slot so that the reverb tank keeps running freely — the fx send input is muted (faded), but the tail rings out in full for as long as the decay dictates, whether that is two seconds or indefinite.
+
+- I want the fx send input to stay muted until a new slot is selected so that no dry signal leaks into an unowned effect bus between slot changes.
+
 ## Safety
 
 fx_reflex allows decay up to 100% and saturation up to 100%. At extreme settings, the feedback path can produce loud, spectrally dense audio. The tanh limiter prevents digital clipping, but the resulting sound can still be intense.
@@ -286,8 +304,6 @@ fx_reflex allows decay up to 100% and saturation up to 100%. At extreme settings
 
 ## Known issues
 
-- **Send A/B routing** may not produce audible output depending on the host script's audio routing. This is a limitation of the fx mod framework's send bus architecture. Use insert mode for reliable operation.
-- **Insert dry/wet** behavior depends on the fx mod framework's replacer synth. At extreme settings, the crossfade may not behave as expected.
 - **Size at extreme values:** Very large size values (>2.5x) combined with high spread can push delay times to their maximum (1 second). The sound may clip or alias. If the reverb sounds wrong, reduce size or spread.
 - **Envelope follower latency:** The ~33 ms update interval (30 Hz) means the follower cannot track sub-bass modulation or very fast transients. This is by design – faster updates would overload the OSC bus.
 
