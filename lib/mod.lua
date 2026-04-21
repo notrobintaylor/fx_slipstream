@@ -2,23 +2,16 @@
 -- fx_reflex — creative reverb with modulation
 -- for the norns fx mod framework
 --
--- Three specialized modulators, each with its own domain:
+-- Two specialized modulators, each with its own domain:
 --
---   modulation™: character (how the reverb sounds)
---     damping, size, spread, mod phase, input diffusion
+--   modulation TM: character (how the reverb sounds)
+--     damping, size, spread, diffusion
 --
 --   envelope follower: amount (how much)
 --     decay, input gain, saturation, mod depth
---     Tracks input amplitude. Feeds values to envelope repeater.
+--     Source: audio input amplitude OR modulation TM register value.
 --
---   envelope repeater: presentation (how you perceive the output)
---     width, tilt
---     Receives the envelope follower's dynamics and echoes them
---     at diminishing strength. The peaks and valleys of your playing
---     ripple through the stereo image and spectrum, increasingly
---     approximate with each repetition.
---
--- The three domains never overlap, so all modulators can run
+-- The two domains never overlap, so both modulators can run
 -- simultaneously without conflict.
 -- =========================================================================
 
@@ -59,31 +52,18 @@ local FxReflex = fx:new{ subpath = "/fx_reflex" }
 -- constants
 -- =========================================================================
 
--- modulation™ targets: character (how the reverb sounds)
+-- modulation TM targets: character (how the reverb sounds)
 local TM_TARGET = {
-    DAMPING=1, SIZE=2, SPREAD=3, MOD_PHASE=4, DIFFUSION=5
+    DAMPING=1, SIZE=2, SPREAD=3, DIFFUSION=4
 }
 local tm_target_names = {
-    "damping", "size", "spread", "mod phase", "input diffusion"
+    "damping", "size", "spread", "diffusion"
 }
 local tm_target_info = {
-    [TM_TARGET.DAMPING]   = { sc="damping",        base="damping",        lo=0.002,hi=1     },
-    [TM_TARGET.SIZE]      = { sc="size",           base="size",           lo=0.1,  hi=3     },
-    [TM_TARGET.SPREAD]    = { sc="spread",         base="spread",         lo=0,    hi=2     },
-    [TM_TARGET.MOD_PHASE] = { sc="modPhase",       base="modPhase",       lo=0,    hi=1     },
-    [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95  },
-}
-
--- envelope repeater targets: presentation (how you perceive the output)
-local ERP_TARGET = {
-    WIDTH=1, TILT=2
-}
-local erp_target_names = {
-    "width", "tilt"
-}
-local erp_target_info = {
-    [ERP_TARGET.WIDTH] = { sc="width", base="width", lo=0,  hi=2  },
-    [ERP_TARGET.TILT]  = { sc="tilt",  base="tilt",  lo=-1, hi=1  },
+    [TM_TARGET.DAMPING]   = { sc="damping",        base="damping",        lo=0.002,hi=1    },
+    [TM_TARGET.SIZE]      = { sc="size",           base="size",           lo=0.1,  hi=3    },
+    [TM_TARGET.SPREAD]    = { sc="spread",         base="spread",         lo=0,    hi=2    },
+    [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95 },
 }
 
 -- envelope follower targets: amount (how much)
@@ -100,6 +80,10 @@ local env_target_info = {
     [ENV_TARGET.MOD_DEPTH]  = { sc="modDepth",   base="modDepth",   lo=0,  hi=1    },
 }
 
+-- envelope follower sources
+local ENV_SOURCE = { AUDIO=1, TM=2 }
+local env_source_names = { "audio input", "modulation TM" }
+
 local step_rate_names = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16"}
 local step_rate_beats = {16, 8, 4, 2, 1, 0.5, 0.25}
 
@@ -108,9 +92,6 @@ local env_dir_names = {"+", "-"}
 
 local steps_names = {"off"}
 for i = 1, 16 do steps_names[i + 1] = tostring(i) end
-
-local erp_subdiv_names = {"1/1","1/2","1/4","1/8","1/16"}
-local erp_subdiv_beats = {4, 2, 1, 0.5, 0.25}
 
 -- =========================================================================
 -- formatters (following fx_llll patterns)
@@ -122,7 +103,6 @@ local function fmt_pct_off(param)
     if v == 0 then return "off" else return v .. " %" end
 end
 local function fmt_ms(param) return param:get() .. " ms" end
-local function fmt_deg(param) return math.floor(param:get() * 3.6 + 0.5) .. "°" end
 
 local function fmt_hz(param)
     local v = param:get()
@@ -141,7 +121,6 @@ end
 -- =========================================================================
 
 local tm_param_ids = {}
-local erp_param_ids = {}
 local env_param_ids = {}
 local original_names = {}
 
@@ -177,15 +156,14 @@ end
 
 local base = {
     preDelay = 0.1,
-    inputGain = 1.0,
+    inputGain = 0.25,
     decay = 0.5,
     damping = 0.064,
     saturation = 0,
-    bandwidth = 0.9995,
-    inputDiffusion = 0.75,
+    bandwidth = 0.5,
+    inputDiffusion = 0.25,
     modDepth = 0,
-    modRate = 1.0,
-    modPhase = 0.5,
+    modRate = 0.25,
     size = 1.0,
     spread = 1.0,
     width = 1.0,
@@ -204,20 +182,9 @@ local turing = {
     slew = 0,
 }
 
--- envelope repeater: receives the envelope follower's dynamics
--- and echoes them onto width/tilt at diminishing strength.
-local fpv = {
-    target = ERP_TARGET.WIDTH,
-    repeats = 0,
-    fade = 75,
-    subdiv = 3,           -- index into erp_subdiv_beats
-    depth = 100,
-    direction = -1,
-    echo_clocks = {},
-}
-
 local env = {
     target = ENV_TARGET.DECAY,
+    source = ENV_SOURCE.AUDIO,
     sensitivity = 0,
     direction = 1,
     slew = 100,           -- ms
@@ -246,29 +213,24 @@ local function pct_to_damping_coef(pct)
     return 0.002 + 0.996 * t * t
 end
 
---- Modulation math: max swing = ±100% of base value, clamped to limits.
+-- swing is range-based so parameters at 0 (saturation, mod depth) are reachable
 local function apply_mod(raw, bv, lo, hi, depth, direction)
     local d = depth / 100
-    local swing = bv * raw * d
+    local swing = (hi - lo) * raw * d
     if direction == 1 then return math.max(lo, math.min(hi, bv + swing))
     elseif direction == -1 then return math.max(lo, math.min(hi, bv - swing))
     else
         local bp = (raw * 2 - 1) * d
-        return math.max(lo, math.min(hi, bv + bv * bp))
+        return math.max(lo, math.min(hi, bv + (hi - lo) * bp))
     end
 end
 
---- Generic: send a modulated value for a given target info table.
-local function send_modulated(info, raw, strength, depth, direction)
+local function send_modulated(info, raw, depth, direction)
     if not info then return end
     local bv = base[info.base]
-    local modded = apply_mod(raw, bv, info.lo, info.hi, depth, direction)
-    local val = bv + (modded - bv) * strength
-    val = math.max(info.lo, math.min(info.hi, val))
-    send(info.sc, val)
+    send(info.sc, apply_mod(raw, bv, info.lo, info.hi, depth, direction))
 end
 
---- Restore a parameter to its base value.
 local function restore_info(info, ids)
     if not info then return end
     send(info.sc, base[info.base])
@@ -276,12 +238,12 @@ local function restore_info(info, ids)
 end
 
 -- =========================================================================
--- modulation™: apply / restore
+-- modulation TM: apply / restore
 -- =========================================================================
 
 local function tm_apply_target(raw)
     local info = tm_target_info[turing.target]
-    send_modulated(info, raw, 1.0, turing.depth, turing.direction)
+    send_modulated(info, raw, turing.depth, turing.direction)
 end
 
 local function tm_restore(target)
@@ -289,88 +251,39 @@ local function tm_restore(target)
 end
 
 -- =========================================================================
--- envelope repeater
--- =========================================================================
-
-local function erp_cancel_echoes()
-    for _, id in ipairs(erp.echo_clocks) do
-        clock.cancel(id)
-    end
-    erp.echo_clocks = {}
-end
-
---- Apply fpv value to its own target (width or tilt).
-local function erp_apply(raw, strength)
-    local info = erp_target_info[erp.target]
-    send_modulated(info, raw, strength, erp.depth, erp.direction)
-end
-
---- Schedule echoes for the fpv's target.
--- Each echo applies the amplitude value at diminishing strength.
-local function erp_schedule_echoes(amplitude)
-    if erp.repeats <= 0 then return end
-    local beats = erp_subdiv_beats[erp.subdiv]
-    local fade_factor = erp.fade / 100
-
-    for i = 1, erp.repeats do
-        local strength = fade_factor ^ i
-        local delay_beats = beats * i
-        local id = clock.run(function()
-            clock.sync(delay_beats)
-            if env.active then
-                send("slew", env.slew / 1000)
-                erp_apply(amplitude, strength)
-            end
-        end)
-        table.insert(erp.echo_clocks, id)
-    end
-end
-
---- Called by the envelope follower with each new amplitude value.
--- Applies immediately at full strength, then schedules echoes.
-local function erp_receive(amplitude)
-    if not env.active then return end
-    erp_apply(amplitude, 1.0)
-    erp_cancel_echoes()
-    erp_schedule_echoes(amplitude)
-end
-
--- =========================================================================
 -- envelope follower
 -- =========================================================================
 
---- Core ENV mapping: takes a 0–1 amplitude and applies it to ENV target.
--- Also feeds the amplitude to envelope repeater.
 local function env_from_value(amplitude)
     if not env.active then return end
     local info = env_target_info[env.target]
     if not info then return end
 
     local bv = base[info.base]
-    local mod_amount = amplitude * (env.sensitivity / 100)
+    local swing = (info.hi - info.lo) * amplitude * (env.sensitivity / 100)
     local val
 
     if env.direction == 1 then
-        val = bv + bv * mod_amount
+        val = bv + swing
     else
-        val = bv - bv * mod_amount
+        val = bv - swing
     end
 
-    val = math.max(info.lo, math.min(info.hi, val))
     send("slew", env.slew / 1000)
-    send(info.sc, val)
-
-    -- Feed the amplitude to envelope repeater
-    erp_receive(amplitude)
+    send(info.sc, math.max(info.lo, math.min(info.hi, val)))
 end
 
 --- Called ~30x/sec with the current input amplitude from SC.
 local function env_receive_audio(amplitude)
     if not env.active then return end
+    if env.source ~= ENV_SOURCE.AUDIO then return end
     env_from_value(amplitude)
 end
 
+local osc_patched = false
 local function start_env_osc()
+    if osc_patched then return end
+    osc_patched = true
     local old_osc = _norns.osc.event
     _norns.osc.event = function(path, args, from)
         if path == '/fx_reflex/env' and args and #args >= 3 then
@@ -383,23 +296,17 @@ end
 local function env_activate()
     env.active = true
     mark_ids(env_param_ids[env.target])
-    if erp.repeats > 0 then mark_ids(erp_param_ids[erp.target]) end
-    start_env_osc()
 end
 
 local function env_deactivate()
     env.active = false
-    erp_cancel_echoes()
     local info = env_target_info[env.target]
     if info then send(info.sc, base[info.base]) end
     unmark_ids(env_param_ids[env.target])
-    -- Restore fpv target
-    local erp_info = erp_target_info[erp.target]
-    if erp_info then restore_info(erp_info, erp_param_ids[erp.target]) end
 end
 
 -- =========================================================================
--- modulation™: step and apply
+-- modulation TM: step and apply
 -- =========================================================================
 
 local function tm_apply()
@@ -408,6 +315,10 @@ local function tm_apply()
     local raw = turing.register / m
     send("slew", turing.slew / 1000)
     tm_apply_target(raw)
+    -- when TM is the env source, feed the register value to the env follower too
+    if env.source == ENV_SOURCE.TM and env.active then
+        env_from_value(raw)
+    end
 end
 
 local function tm_step()
@@ -424,7 +335,7 @@ local function tm_step()
 end
 
 -- =========================================================================
--- modulation™: activation / deactivation
+-- modulation TM: activation / deactivation
 -- =========================================================================
 
 local function start_tm_clock()
@@ -455,7 +366,6 @@ end
 
 local function cleanup()
     if tm_clock_id then clock.cancel(tm_clock_id); tm_clock_id = nil end
-    erp_cancel_echoes()
 end
 
 -- =========================================================================
@@ -464,9 +374,47 @@ end
 
 function FxReflex:add_params()
 
-    -- slot --
+    -- slot management (see README 1.0 / user stories):
+    -- send a / send b: route directly to the norns send buses, independent of the
+    --   insert replacer synth. no drywet parameter involved.
+    -- insert: equal power crossfade — dry = cos(drywet·π/2), wet = sin(drywet·π/2).
+    --   at drywet=1, cos(π/2)=0 exactly, so no dry signal leaks through at full wet.
+    -- click-free switching: the fx send level is faded to 0 (≈20 ms) before the
+    --   new slot is armed, preventing audible clicks from abrupt bus-gain changes.
+    -- spillover: on slot deselect the send input is muted (faded); the reverb tank
+    --   keeps running freely. the tail rings out for as long as decay dictates —
+    --   the send stays muted until a new slot is selected.
     params:add_separator("fx_rx", "fx reflex")
     FxReflex:add_slot("fx_rx_slot", "slot")
+
+    do
+        local slot_idx = params.lookup["fx_rx_slot"]
+        if slot_idx then
+            local orig = params.params[slot_idx].action
+            params:set_action("fx_rx_slot", function(v)
+                if orig then orig(v) end
+                local p = params.params[params.lookup["fx_rx_slot"]]
+                if p and p.options and p.options[v] and
+                   string.lower(p.options[v]) == "insert" then
+                    for _, q in ipairs(params.params) do
+                        if q.id and string.find(q.id, "drywet") then
+                            params:set(q.id, 0); break
+                        end
+                    end
+                end
+            end)
+        end
+    end
+
+    params:add_trigger("fx_rx_init", "initialize")
+    params:set_action("fx_rx_init", function()
+        for _, p in ipairs(params.params) do
+            if p.id and string.sub(p.id, 1, 6) == "fx_rx_" and
+               p.id ~= "fx_rx_init" and p.default ~= nil then
+                params:set(p.id, p.default)
+            end
+        end
+    end)
 
     -- =====================================================================
     -- reverb
@@ -479,7 +427,13 @@ function FxReflex:add_params()
         send("preDelay", v / 1000)
     end)
 
-    params:add_number("fx_rx_input_gain", "input gain", 0, 100, 100, fmt_pct)
+    params:add_number("fx_rx_bandwidth", "bandwidth", 0, 100, 50, fmt_pct)
+    params:set_action("fx_rx_bandwidth", function(v)
+        base.bandwidth = v / 100
+        send("bandwidth", v / 100)
+    end)
+
+    params:add_number("fx_rx_input_gain", "input gain", 0, 100, 25, fmt_pct)
     params:set_action("fx_rx_input_gain", function(v)
         base.inputGain = v / 100
         if not (env.active and env.target == ENV_TARGET.INPUT_GAIN) then
@@ -512,7 +466,7 @@ function FxReflex:add_params()
         end
     end)
 
-    params:add_number("fx_rx_diffusion", "input diffusion", 0, 100, 75, fmt_pct)
+    params:add_number("fx_rx_diffusion", "input diffusion", 0, 100, 25, fmt_pct)
     params:set_action("fx_rx_diffusion", function(v)
         base.inputDiffusion = v / 100
         if not (tm_active() and turing.target == TM_TARGET.DIFFUSION) then
@@ -539,23 +493,19 @@ function FxReflex:add_params()
     params:add_number("fx_rx_width", "width", 0, 200, 100, fmt_pct)
     params:set_action("fx_rx_width", function(v)
         base.width = v / 100
-        if not (env.active and erp.target == ERP_TARGET.WIDTH) then
-            send("width", v / 100)
-        end
+        send("width", v / 100)
     end)
 
     params:add_number("fx_rx_tilt", "tilt", -100, 100, 0, fmt_pct)
     params:set_action("fx_rx_tilt", function(v)
         base.tilt = v / 100
-        if not (env.active and erp.target == ERP_TARGET.TILT) then
-            send("tilt", v / 100)
-        end
+        send("tilt", v / 100)
     end)
 
     -- =====================================================================
-    -- tank modulation
+    -- modulation
     -- =====================================================================
-    params:add_separator("fx_rx_mod", "tank modulation")
+    params:add_separator("fx_rx_mod", "modulation")
 
     params:add_number("fx_rx_mod_depth", "mod depth", 0, 100, 0, fmt_pct)
     params:set_action("fx_rx_mod_depth", function(v)
@@ -566,24 +516,16 @@ function FxReflex:add_params()
     end)
 
     params:add_control("fx_rx_mod_rate", "mod rate",
-        controlspec.new(0.01, 10000, 'exp', 0, 1.0, "hz"), fmt_hz)
+        controlspec.new(0.01, 10000, 'exp', 0, 0.25, "hz"), fmt_hz)
     params:set_action("fx_rx_mod_rate", function(v)
         base.modRate = v
         send("modRate", v)
     end)
 
-    params:add_number("fx_rx_mod_phase", "mod phase", 0, 100, 50, fmt_deg)
-    params:set_action("fx_rx_mod_phase", function(v)
-        base.modPhase = v / 100
-        if not (tm_active() and turing.target == TM_TARGET.MOD_PHASE) then
-            send("modPhase", v / 100)
-        end
-    end)
-
     -- =====================================================================
-    -- modulation™ (character: damping, size, spread, mod phase, diffusion)
+    -- modulation TM (character: damping, size, spread, diffusion)
     -- =====================================================================
-    params:add_separator("fx_rx_tm", "modulation™")
+    params:add_separator("fx_rx_tm", "modulation TM")
 
     params:add_option("fx_rx_tm_assign", "mod assign", tm_target_names, TM_TARGET.SIZE)
     params:set_action("fx_rx_tm_assign", function(v)
@@ -622,10 +564,23 @@ function FxReflex:add_params()
         elseif was then tm_deactivate() end
     end)
 
+    params:add_trigger("fx_rx_tm_randomize", "randomize")
+    params:set_action("fx_rx_tm_randomize", function()
+        if tm_active() then
+            turing.register = math.random(0, reg_max())
+            tm_apply()
+        end
+    end)
+
     -- =====================================================================
     -- envelope follower (amount: decay, input gain, saturation, mod depth)
     -- =====================================================================
     params:add_separator("fx_rx_env", "envelope follower")
+
+    params:add_option("fx_rx_env_source", "source", env_source_names, ENV_SOURCE.AUDIO)
+    params:set_action("fx_rx_env_source", function(v)
+        env.source = v
+    end)
 
     params:add_option("fx_rx_env_target", "target", env_target_names, ENV_TARGET.DECAY)
     params:set_action("fx_rx_env_target", function(v)
@@ -661,60 +616,13 @@ function FxReflex:add_params()
     end)
 
     -- =====================================================================
-    -- envelope repeater (presentation: width, tilt)
-    -- Receives dynamics from the envelope follower and echoes them.
-    -- =====================================================================
-    params:add_separator("fx_rx_fpv", "envelope repeater")
-
-    params:add_option("fx_rx_erp_target", "target", erp_target_names, ERP_TARGET.WIDTH)
-    params:set_action("fx_rx_erp_target", function(v)
-        if env.active then
-            restore_info(erp_target_info[erp.target], erp_param_ids[erp.target])
-        end
-        erp.target = v
-        if env.active then
-            mark_ids(erp_param_ids[v])
-        end
-    end)
-
-    local erp_repeats_names = {"off", "1", "2", "3", "4"}
-    params:add_option("fx_rx_erp_repeats", "repeats", erp_repeats_names, 1)
-    params:set_action("fx_rx_erp_repeats", function(v)
-        local was = erp.repeats > 0
-        erp.repeats = v - 1
-        if v == 1 then
-            erp_cancel_echoes()
-        end
-    end)
-
-    params:add_number("fx_rx_erp_fade", "repeats fade", 0, 100, 75, fmt_pct)
-    params:set_action("fx_rx_erp_fade", function(v) erp.fade = v end)
-
-    params:add_option("fx_rx_erp_subdiv", "repeats subdiv", erp_subdiv_names, 3)
-    params:set_action("fx_rx_erp_subdiv", function(v) erp.subdiv = v end)
-
-    params:add_number("fx_rx_erp_depth", "mod depth", 0, 100, 100, fmt_pct)
-    params:set_action("fx_rx_erp_depth", function(v) erp.depth = v end)
-
-    params:add_option("fx_rx_erp_dir", "mod direction", dir_names, 2)
-    params:set_action("fx_rx_erp_dir", function(v)
-        if v == 1 then erp.direction = 1
-        elseif v == 2 then erp.direction = -1
-        else erp.direction = 0 end
-    end)
-
-    -- =====================================================================
     -- populate (M) marker maps
     -- =====================================================================
 
     tm_param_ids[TM_TARGET.DAMPING]   = {"fx_rx_damping"}
     tm_param_ids[TM_TARGET.SIZE]      = {"fx_rx_size"}
     tm_param_ids[TM_TARGET.SPREAD]    = {"fx_rx_spread"}
-    tm_param_ids[TM_TARGET.MOD_PHASE] = {"fx_rx_mod_phase"}
     tm_param_ids[TM_TARGET.DIFFUSION] = {"fx_rx_diffusion"}
-
-    erp_param_ids[ERP_TARGET.WIDTH] = {"fx_rx_width"}
-    erp_param_ids[ERP_TARGET.TILT]  = {"fx_rx_tilt"}
 
     env_param_ids[ENV_TARGET.DECAY]      = {"fx_rx_decay"}
     env_param_ids[ENV_TARGET.INPUT_GAIN] = {"fx_rx_input_gain"}
