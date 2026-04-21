@@ -8,8 +8,6 @@ Built for the [norns fx mod framework](https://llllllll.co/t/fx-mod-framework/).
 
 No external UGens required.
 
----
-
 ## How it got here
 
 fx_reflex started as a learning exercise. After building fx_llll – a multitap delay with a shift register and event system – the next question was whether the same modulation architecture could work on a reverb. The answer turned out to be yes, but the interesting part was how differently everything behaved once the modulation targets stopped being concrete and became abstract.
@@ -31,8 +29,6 @@ The three domains crystallized late: character (modulation™: damping, size, sp
 The saturation parameter controls how hard the signal hits the tanh limiter in the feedback path. At 0%, the limiter is nearly transparent – it's just a safety net. At higher values, the drive increases and the feedback path starts to color the sound. At extreme settings, the hall becomes a distortion effect where each recirculation adds harmonic density. This was always implicit in Dattorro's design – the tanh was there for safety – but making it a controllable parameter turns a protection mechanism into a creative tool.
 
 The inspirations for this approach came from hardware reverbs that treat the algorithm as an instrument rather than an emulation. Make Noise's Erbe-Verb, the Mimeophon, and Qu-Bit's Aurora share a philosophy: deep modulation access, open architecture, and the deliberate refusal to sound like a conventional room. These are reverbs that musicians use as voices – not because they can't do traditional hall sounds, but because the interesting territory lies in the spaces between familiar categories. The tradeoff is real: if you want a convincing concert hall, these are not the right tools. But if you want a reverb that rewards curiosity the way a synthesizer does, that's exactly what fx_reflex tries to be.
-
----
 
 ## Install
 
@@ -62,8 +58,6 @@ dust/code/fx_reflex/
 │   └── mod.lua
 └── reflex.sc
 ```
-
----
 
 ## Signal flow
 
@@ -111,8 +105,6 @@ The tank is a figure-eight: Branch 1's output crosses into Branch 2's input and 
 After the tank, the wet signal passes through two output processors: width controls the stereo image via mid/side processing, and tilt shifts the spectral balance via a first-order shelf at ~1 kHz. Both are targets for the envelope repeater.
 
 The envelope follower tracks input amplitude in SuperCollider and sends it to Lua ~30 times per second. Each amplitude value does two things: it modulates the envelope follower's own target (decay, input gain, saturation, or mod depth), and it feeds into the envelope repeater, which applies it to width or tilt and then echoes it at diminishing strength.
-
----
 
 ## Parameters
 
@@ -243,8 +235,6 @@ Receives the envelope follower's dynamics and echoes them onto the presentation 
 
 **mod depth** and **mod direction** control how strongly and in which polarity the dynamics affect the target, independently of the envelope follower's own settings.
 
----
-
 ## Recipes
 
 **Clean plate.** Default settings, no modulators active. Predelay = 80 ms, decay = 55%, damping = 25%. A warm, well-behaved plate reverb. Start here.
@@ -268,8 +258,6 @@ Receives the envelope follower's dynamics and echoes them onto the presentation 
 **Frozen room.** Decay = 95%, input gain = 0%. Play something, then drop the gain. The reverb tail holds almost indefinitely while nothing new enters. Slowly increase damping to watch the frozen sound darken.
 
 **Ambient swell.** Envelope follower: target = input gain, sensitivity = 80%, direction = +, attack = 500 ms, release = 2000 ms, slew = 500 ms. Decay = 75%. Envelope repeater: target = width, repeats = 2, fade = 80%, subdiv = 1/2. The reverb builds slowly as you play louder, the stereo image widens in sympathy, and both fade slowly when you stop. The long attack smooths out individual notes.
-
----
 
 ## User stories
 
@@ -300,20 +288,14 @@ fx_reflex allows decay up to 100% and saturation up to 100%. At extreme settings
 - **The envelope follower is your safety valve.** Set target = input gain, direction = -, sensitivity = 30%. When things get loud, less signal enters the tank.
 - **Protect your hearing.** This is not a disclaimer. It's advice from someone who has been surprised by feedback loops more than once.
 
----
-
 ## Known issues
 
 - **Size at extreme values:** Very large size values (>2.5x) combined with high spread can push delay times to their maximum (1 second). The sound may clip or alias. If the reverb sounds wrong, reduce size or spread.
 - **Envelope follower latency:** The ~33 ms update interval (30 Hz) means the follower cannot track sub-bass modulation or very fast transients. This is by design – faster updates would overload the OSC bus.
 
----
-
 ## Dependencies
 
 - [fx mod framework](https://llllllll.co/t/fx-mod-framework/)
-
----
 
 ## Credits
 
