@@ -13,15 +13,14 @@ FxReflex : FxBase {
     *new {
         var ret = super.newCopyArgs(nil, \none, (
             preDelay: 0.1,
-            inputGain: 1.0,
+            inputGain: 0.25,
             decay: 0.5,
             damping: 0.064,
             saturation: 0,
-            bandwidth: 0.9995,
-            inputDiffusion: 0.75,
+            bandwidth: 0.5,
+            inputDiffusion: 0.25,
             modDepth: 0,
-            modRate: 1.0,
-            modPhase: 0.5,
+            modRate: 0.25,
             size: 1.0,
             spread: 1.0,
             width: 1.0,
@@ -48,20 +47,19 @@ FxReflex : FxBase {
             };
 
             var slew       = \slew.kr(0);
-            var inputGain  = \inputGain.kr(1.0).lag(slew);
+            var inputGain  = \inputGain.kr(0.25).lag(slew);
             var decay      = \decay.kr(0.5).lag(slew);
             var damping    = \damping.kr(0.0005).lag(slew);
             var saturation = \saturation.kr(0).lag(slew);
-            var bandwidth  = \bandwidth.kr(0.9995);
+            var bandwidth  = \bandwidth.kr(0.5);
             var modDepth   = \modDepth.kr(0.2).lag(slew);
-            var modRate    = \modRate.kr(1.0);
-            var modPhase   = \modPhase.kr(0.5).lag(slew);
+            var modRate    = \modRate.kr(0.25).lag(slew);
             var size       = \size.kr(1.0).lag(0.3);
             var spread     = \spread.kr(1.0).lag(0.3);
             var width      = \width.kr(1.0).lag(slew);
             var tilt       = \tilt.kr(0).lag(slew);
 
-            var diffUser   = \inputDiffusion.kr(0.75).lag(slew);
+            var diffUser   = \inputDiffusion.kr(0.25).lag(slew);
             var diff1      = diffUser;
             var diff2      = (diffUser * 0.833).clip(0, 0.75);
             var decayDiff2 = (decay + 0.15).clip(0.25, 0.5);
@@ -79,7 +77,7 @@ FxReflex : FxBase {
 
             var input = In.ar(inBus, 2);
             var envFollow = Amplitude.kr(
-                Mix.ar(input),
+                Mix.ar(input) * 0.5,
                 \envAttack.kr(0.01),
                 \envRelease.kr(0.1)
             );
@@ -95,7 +93,7 @@ FxReflex : FxBase {
 
             // ---- PREDELAY → BANDWIDTH ----
             mono = DelayN.ar(mono, 0.5, \preDelay.kr(0.1).lag(0.1));
-            mono = OnePole.ar(mono, bandwidth);
+            mono = OnePole.ar(mono, 1 - bandwidth);
 
             // ---- INPUT DIFFUSION ----
             mono = AllpassN.ar(mono, 0.1, si.(142), gFacT60.(si.(142), diff1));
@@ -132,7 +130,7 @@ FxReflex : FxBase {
             tank2 = AllpassC.ar(
                 (tank * decay) + mono,
                 maxdelaytime: 1,
-                delaytime: st.(908) + (modExc * SinOsc.ar(modRate * 0.8, modPhase * 2pi, modDepth)),
+                delaytime: st.(908) + (modExc * SinOsc.ar(modRate * 0.8, pi, modDepth)),
                 decaytime: gFacT60.(st.(908), -0.7)
             );
 
