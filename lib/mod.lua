@@ -1,18 +1,5 @@
 -- =========================================================================
 -- fx_reflex — creative reverb with modulation
--- for the norns fx mod framework
---
--- Two specialized modulators, each with its own domain:
---
---   modulation TM: character (how the reverb sounds)
---     damping, size, spread, diffusion
---
---   envelope follower: amount (how much)
---     decay, input gain, saturation, mod depth
---     Source: audio input amplitude OR modulation TM register value.
---
--- The two domains never overlap, so both modulators can run
--- simultaneously without conflict.
 -- =========================================================================
 
 local fx = require("fx/lib/fx")
@@ -21,7 +8,7 @@ local hook = require 'core/hook'
 local tab = require 'tabutil'
 
 -- =========================================================================
--- post-init hack (boilerplate from fx mod framework)
+-- post-init hack
 -- =========================================================================
 
 if hook.script_post_init == nil and mod.hook.patched == nil then
@@ -46,27 +33,31 @@ if hook.script_post_init == nil and mod.hook.patched == nil then
     end)
 end
 
+math.randomseed(os.time())
+
 local FxReflex = fx:new{ subpath = "/fx_reflex" }
 
 -- =========================================================================
 -- constants
 -- =========================================================================
 
--- modulation TM targets: character (how the reverb sounds)
 local TM_TARGET = {
     DAMPING=1, SIZE=2, SPREAD=3, DIFFUSION=4
 }
 local tm_target_names = {
     "damping", "size", "spread", "diffusion"
 }
+
+local DIFF_MAX = 0.95
+local DAMP_MAX = 0.998
+
 local tm_target_info = {
-    [TM_TARGET.DAMPING]   = { sc="damping",        base="damping",        lo=0.002,hi=1    },
-    [TM_TARGET.SIZE]      = { sc="size",           base="size",           lo=0.1,  hi=3    },
-    [TM_TARGET.SPREAD]    = { sc="spread",         base="spread",         lo=0,    hi=2    },
-    [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,    hi=0.95 },
+    [TM_TARGET.DAMPING]   = { sc="damping",        base="damping",        lo=0.002, hi=DAMP_MAX },
+    [TM_TARGET.SIZE]      = { sc="size",           base="size",           lo=0.1,   hi=3        },
+    [TM_TARGET.SPREAD]    = { sc="spread",         base="spread",         lo=0,     hi=2        },
+    [TM_TARGET.DIFFUSION] = { sc="inputDiffusion", base="inputDiffusion", lo=0,     hi=DIFF_MAX },
 }
 
--- envelope follower targets: amount (how much)
 local ENV_TARGET = {
     DECAY=1, INPUT_GAIN=2, SATURATION=3, MOD_DEPTH=4
 }
@@ -80,7 +71,6 @@ local env_target_info = {
     [ENV_TARGET.MOD_DEPTH]  = { sc="modDepth",   base="modDepth",   lo=0,  hi=1    },
 }
 
--- envelope follower sources
 local ENV_SOURCE = { AUDIO=1, TM=2 }
 local env_source_names = { "audio input", "modulation TM" }
 
@@ -94,7 +84,7 @@ local steps_names = {"off"}
 for i = 1, 16 do steps_names[i + 1] = tostring(i) end
 
 -- =========================================================================
--- formatters (following fx_llll patterns)
+-- formatters
 -- =========================================================================
 
 local function fmt_pct(param) return param:get() .. " %" end
@@ -178,7 +168,7 @@ local turing = {
     depth = 100,
     direction = -1,
     stability = 50,
-    clock_div = 5,        -- index into step_rate_beats (1/4)
+    clock_div = 5,
     slew = 0,
 }
 
@@ -187,7 +177,7 @@ local env = {
     source = ENV_SOURCE.AUDIO,
     sensitivity = 0,
     direction = 1,
-    slew = 100,           -- ms
+    slew = 100,
     active = false,
 }
 
@@ -213,7 +203,6 @@ local function pct_to_damping_coef(pct)
     return 0.002 + 0.996 * t * t
 end
 
--- swing is range-based so parameters at 0 (saturation, mod depth) are reachable
 local function apply_mod(raw, bv, lo, hi, depth, direction)
     local d = depth / 100
     local swing = (hi - lo) * raw * d
@@ -269,11 +258,10 @@ local function env_from_value(amplitude)
         val = bv - swing
     end
 
-    send("slew", env.slew / 1000)
+    send("slewEnv", env.slew / 1000)
     send(info.sc, math.max(info.lo, math.min(info.hi, val)))
 end
 
---- Called ~30x/sec with the current input amplitude from SC.
 local function env_receive_audio(amplitude)
     if not env.active then return end
     if env.source ~= ENV_SOURCE.AUDIO then return end
@@ -313,9 +301,8 @@ local function tm_apply()
     if not tm_active() then return end
     local m = reg_max(); if m == 0 then return end
     local raw = turing.register / m
-    send("slew", turing.slew / 1000)
+    send("slewTm", turing.slew / 1000)
     tm_apply_target(raw)
-    -- when TM is the env source, feed the register value to the env follower too
     if env.source == ENV_SOURCE.TM and env.active then
         env_from_value(raw)
     end
@@ -350,7 +337,6 @@ local function start_tm_clock()
 end
 
 local function tm_activate()
-    turing.register = math.random(0, reg_max())
     mark_ids(tm_param_ids[turing.target])
     start_tm_clock()
 end
@@ -374,16 +360,6 @@ end
 
 function FxReflex:add_params()
 
-    -- slot management (see README 1.0 / user stories):
-    -- send a / send b: route directly to the norns send buses, independent of the
-    --   insert replacer synth. no drywet parameter involved.
-    -- insert: equal power crossfade — dry = cos(drywet·π/2), wet = sin(drywet·π/2).
-    --   at drywet=1, cos(π/2)=0 exactly, so no dry signal leaks through at full wet.
-    -- click-free switching: the fx send level is faded to 0 (≈20 ms) before the
-    --   new slot is armed, preventing audible clicks from abrupt bus-gain changes.
-    -- spillover: on slot deselect the send input is muted (faded); the reverb tank
-    --   keeps running freely. the tail rings out for as long as decay dictates —
-    --   the send stays muted until a new slot is selected.
     params:add_separator("fx_rx", "fx reflex")
     FxReflex:add_slot("fx_rx_slot", "slot")
 
@@ -468,9 +444,10 @@ function FxReflex:add_params()
 
     params:add_number("fx_rx_diffusion", "input diffusion", 0, 100, 25, fmt_pct)
     params:set_action("fx_rx_diffusion", function(v)
-        base.inputDiffusion = v / 100
+        local d = math.min(DIFF_MAX, v / 100)
+        base.inputDiffusion = d
         if not (tm_active() and turing.target == TM_TARGET.DIFFUSION) then
-            send("inputDiffusion", v / 100)
+            send("inputDiffusion", d)
         end
     end)
 
@@ -523,7 +500,7 @@ function FxReflex:add_params()
     end)
 
     -- =====================================================================
-    -- modulation TM (character: damping, size, spread, diffusion)
+    -- modulation TM
     -- =====================================================================
     params:add_separator("fx_rx_tm", "modulation TM")
 
@@ -560,7 +537,9 @@ function FxReflex:add_params()
     params:set_action("fx_rx_tm_steps", function(v)
         local was = tm_active()
         turing.steps = v - 1
-        if tm_active() then tm_activate()
+        if tm_active() then
+            if not was then turing.register = math.random(0, reg_max()) end
+            tm_activate()
         elseif was then tm_deactivate() end
     end)
 
@@ -573,7 +552,7 @@ function FxReflex:add_params()
     end)
 
     -- =====================================================================
-    -- envelope follower (amount: decay, input gain, saturation, mod depth)
+    -- envelope follower
     -- =====================================================================
     params:add_separator("fx_rx_env", "envelope follower")
 
@@ -616,7 +595,7 @@ function FxReflex:add_params()
     end)
 
     -- =====================================================================
-    -- populate (M) marker maps
+    -- (M) marker maps
     -- =====================================================================
 
     tm_param_ids[TM_TARGET.DAMPING]   = {"fx_rx_damping"}
