@@ -1,12 +1,6 @@
 // =========================================================================
 // FxReflex — creative reverb with modulation
 // =========================================================================
-//
-// A plate-class reverb based on Dattorro's topology (AES 1997),
-// adapted for the norns fx mod framework.
-//
-// No external UGens required.
-// =========================================================================
 
 FxReflex : FxBase {
 
@@ -27,7 +21,6 @@ FxReflex : FxBase {
             tilt: 0,
             envAttack: 0.01,
             envRelease: 0.1,
-            slew: 0,
         ), nil, 0.5);
         ^ret;
     }
@@ -39,28 +32,28 @@ FxReflex : FxBase {
     addSynthdefs {
         SynthDef(\fxReflex, {|inBus, outBus|
 
-            // ---- ALL VAR DECLARATIONS (SC requires these at block top) ----
             var dSR = 29761;
             var exMax = 24;
             var gFacT60 = { |delay, gFac|
                 gFac.sign * (-3 * delay / log10(gFac.abs));
             };
 
-            var slew       = \slew.kr(0);
-            var inputGain  = \inputGain.kr(0.25).lag(slew);
-            var decay      = \decay.kr(0.5).lag(slew);
-            var damping    = \damping.kr(0.0005).lag(slew);
-            var saturation = \saturation.kr(0).lag(slew);
-            var bandwidth  = \bandwidth.kr(0.5);
-            var modDepth   = \modDepth.kr(0.2).lag(slew);
-            var modRate    = \modRate.kr(0.25).lag(slew);
-            var size       = \size.kr(1.0).lag(0.3);
-            var spread     = \spread.kr(1.0).lag(0.3);
-            var width      = \width.kr(1.0).lag(slew);
-            var tilt       = \tilt.kr(0).lag(slew);
+            var slewTm     = \slewTm.kr(0);
+            var slewEnv    = \slewEnv.kr(0);
+            var inputGain  = \inputGain.kr(0.25).lag(slewEnv);
+            var decay      = \decay.kr(0.5).lag(slewEnv);
+            var damping    = \damping.kr(0.0005).lag(slewTm);
+            var saturation = \saturation.kr(0).lag(slewEnv);
+            var bandwidth  = \bandwidth.kr(0.5).lag(0.05);
+            var modDepth   = \modDepth.kr(0.2).lag(slewEnv);
+            var modRate    = \modRate.kr(0.25).lag(0.05);
+            var size       = \size.kr(1.0).lag(slewTm);
+            var spread     = \spread.kr(1.0).lag(slewTm);
+            var width      = \width.kr(1.0).lag(0.05);
+            var tilt       = \tilt.kr(0).lag(0.05);
 
-            var diffUser   = \inputDiffusion.kr(0.25).lag(slew);
-            var diff1      = diffUser;
+            var diffUser   = \inputDiffusion.kr(0.25).lag(slewTm);
+            var diff1      = diffUser.clip(0, 0.95);
             var diff2      = (diffUser * 0.833).clip(0, 0.75);
             var decayDiff2 = (decay + 0.15).clip(0.25, 0.5);
             var satDrive   = 1 + (saturation * 9);
@@ -88,10 +81,10 @@ FxReflex : FxBase {
             var tank, tank2;
             var mid, side, tiltAbs, wet, wetLP, wetHP;
 
-            // ---- ENVELOPE FOLLOWER → LUA ----
+            // ---- ENVELOPE FOLLOWER ----
             SendReply.kr(Impulse.kr(30), '/fx_reflex/env', envFollow);
 
-            // ---- PREDELAY → BANDWIDTH ----
+            // ---- PREDELAY + BANDWIDTH ----
             mono = DelayN.ar(mono, 0.5, \preDelay.kr(0.1).lag(0.1));
             mono = OnePole.ar(mono, 1 - bandwidth);
 
@@ -150,16 +143,16 @@ FxReflex : FxBase {
             tank2 = DelayN.ar(tank2, 1, st.(3163));
             wetL = (0.6 * tank2) + wetL;
 
-            // ---- FEEDBACK (via saturation + tanh) ----
+            // ---- FEEDBACK ----
             LocalOut.ar((tank2 * decay * satDrive).tanh);
 
-            // ---- OUTPUT: WIDTH (mid/side stereo) ----
+            // ---- OUTPUT: WIDTH ----
             mid  = (wetL + wetR) * 0.5;
             side = (wetL - wetR) * 0.5;
             wetL = mid + (side * width);
             wetR = mid - (side * width);
 
-            // ---- OUTPUT: TILT EQ (first-order shelf at ~1kHz) ----
+            // ---- OUTPUT: TILT EQ ----
             tiltAbs = tilt.abs;
             wet = [wetL, wetR];
             wetLP = OnePole.ar(wet, (-2pi * (1000 / SampleRate.ir)).exp);
@@ -169,8 +162,8 @@ FxReflex : FxBase {
                 (wet * (1 - tiltAbs)) + (wetHP * tiltAbs * 2)
             ]);
 
-            // ---- OUTPUT: HPF + OUT ----
-            Out.ar(outBus, HPF.ar(wet, 60));
+            // ---- OUTPUT: HPF + LIMITER ----
+            Out.ar(outBus, Limiter.ar(HPF.ar(wet, 60), 1.0, 0.01));
         }).add;
     }
 }
